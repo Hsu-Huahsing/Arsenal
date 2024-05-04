@@ -5,16 +5,14 @@ Created on Fri May 22 23:22:32 2020
 
 @author: mac
 """
-import json.decoder
 
 from StevenTricks.dfi import findval
 from StevenTricks.netGEN import randomheader
 from StevenTricks.fileop import logfromfolder, picklesave, pickleload
-from StevenTricks.warren.conf import collection, db_path, dailycollection
-from StevenTricks.warren.twse import Log
+from StevenTricks.process import sleepteller
+from conf import collection, db_path, dailycollection
+from twse import Log
 from os import path, remove, makedirs
-from time import sleep
-from random import randint
 from traceback import format_exc
 import sys
 import requests as re
@@ -22,13 +20,7 @@ import pandas as pd
 import datetime
 
 
-def sleepteller(mode=None):
-    if mode == 'long':
-        time = randint(600, 660)
-    else:
-        time = randint(10, 30)
-    print('Be about to sleep {}'.format(str(time)))
-    sleep(time)
+
 
 
 if __name__ == "__main__":
