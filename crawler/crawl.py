@@ -20,9 +20,6 @@ import pandas as pd
 import datetime
 
 
-
-
-
 if __name__ == "__main__":
     stocklog = Log(db_path)
     log = stocklog.findlog('source', 'log.pkl')
