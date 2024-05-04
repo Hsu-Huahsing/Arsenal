@@ -10,10 +10,12 @@ from StevenTricks.dfi import findval
 from StevenTricks.netGEN import randomheader
 from StevenTricks.fileop import logfromfolder, picklesave, pickleload
 from StevenTricks.process import sleepteller
+from StevenTricks.tracker import log
 from conf import collection, db_path, dailycollection
 from twse import Log
 from os import path, remove, makedirs
 from traceback import format_exc
+
 import sys
 import requests as re
 import pandas as pd
@@ -22,14 +24,15 @@ import datetime
 
 if __name__ == "__main__":
     stocklog = Log(db_path)
-    log = stocklog.findlog('source', 'log.pkl')
+    # 每一次被當成主要模組呼叫，都會自動生成倉庫資料夾，為了確保一定有資料夾，所以每次使用都要呼叫一次
+
+    log = stocklog.findlog('source', 'log.pkl', collection)
+    # 先找到source(來源資料夾)，裡面有找log.pkl記錄檔，就知道之前抓到哪裡，可以延續抓下去，如果沒有給定週期表(periodictable)，就會回傳空的dataframe
+
     errorlog = stocklog.findlog('source', 'errorlog.pkl')
-    # 先看有沒有現有的log和errorlog
-    log = stocklog.updatelog(log, collection)
-    # 如果有就新增，沒有就自創一個
-    if errorlog is None:
-        errorlog = pd.DataFrame([])
+    # 要先參考之前的error log，除了延續之前的資料，還可以修正error的部分
     # errorlog可以直接創一個空的df
+
     log = log.replace({'succeed': 'wait'})
     # 在抓取之前要先把有抓過的紀錄都改為待抓'wait'
     log = logfromfolder(path.join(db_path, 'source'), fileinclude=['.pkl'], fileexclude=['log'], direxclude=['stocklist'], dirinclude=[], log=log, fillval='succeed')
