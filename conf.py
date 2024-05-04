@@ -1,6 +1,8 @@
 
+#因為爬蟲的結果會有很多db要儲存，要先指定warehouse(倉庫)的路徑
 db_path = r'/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock'
 
+#先統一全部爬蟲抓下來的table使用的column name
 colname_dic = {
     "價格指數(跨市場)": "價格指數_跨市場",
     "價格指數(臺灣指數公司)": '價格指數_臺灣指數公司',
@@ -43,9 +45,9 @@ colname_dic = {
     '項目': "名稱",
     '單位名稱': "名稱",
     '日期': 'date',
-
 }
 
+#這裡是使用在爬蟲裡面request的header
 headers = {
     'mac': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.6 Safari/605.1.15',
     'safari14.0': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Safari/605.1.15',
@@ -58,6 +60,7 @@ headers = {
     'firefoxmac': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:70.0) Gecko/20100101 Firefox/70.0',
     'firefoxwin': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:70.0) Gecko/20100101 Firefox/70.0'
 }
+
 # 這裡給的col欄位都是要清理過後的
 numericol = {
     'stocklist': ['利率值'],
@@ -110,8 +113,11 @@ datecol = {
     'stocklist': ['date', '發行日', '到期日', '上市日', '掛牌日', '公開發行日', '登錄日', '發布日']
 }
 
+#因為漲跌的欄位用不到也很難用，所以直接drop掉
 dropcol = ['漲跌(+/-)']
 
+#這裡是全部爬蟲會用到的相關資訊
+#date min是這個指數的起始時間
 collection = {
     "每日收盤行情": {
         'url': r'https://www.twse.com.tw/exchangeReport/MI_INDEX?',
