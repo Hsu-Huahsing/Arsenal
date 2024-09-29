@@ -1,6 +1,9 @@
 
 #因為爬蟲的結果會有很多db要儲存，要先指定warehouse(倉庫)的路徑
-db_path = r'/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock'
+
+path_dic = {
+    "stock_twse_db": r"/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock/twse"
+}
 
 #先統一全部爬蟲抓下來的table使用的column name
 colname_dic = {
@@ -153,7 +156,7 @@ collection = {
             'date': '',
             '_': '1613392395864'
             },
-        'freq': 'M',
+        'freq': 'ME',
         'datemin': '1990-1-4',
         'nomatch': [],
         'subtitle': ['市場成交資訊'],
@@ -230,7 +233,7 @@ collection = {
             'stockNo': '',
             '_': '1596117360962'
             },
-        'freq': 'M',
+        'freq': 'ME',
         'datemin': '2014-1-6',
         'nomatch': ['每月當日沖銷交易標的及統計'],
         'subtitle': ['每月當日沖銷交易標的及統計'],

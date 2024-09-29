@@ -10,9 +10,9 @@ from StevenTricks.dfi import findval
 from StevenTricks.netGEN import randomheader
 from StevenTricks.fileop import logfromfolder, picklesave, pickleload
 from StevenTricks.process import sleepteller
-from StevenTricks.tracker import log
+from StevenTricks.tracker import Log
 from conf import collection, db_path, dailycollection
-from twse import Log
+
 from os import path, remove, makedirs
 from traceback import format_exc
 
@@ -31,12 +31,11 @@ if __name__ == "__main__":
 
     errorlog = stocklog.findlog('source', 'errorlog.pkl')
     # 要先參考之前的error log，除了延續之前的資料，還可以修正error的部分
-    # errorlog可以直接創一個空的df
+    # errorlog如果是空的，可以直接創一個空的df
 
-    log = log.replace({'succeed': 'wait'})
-    # 在抓取之前要先把有抓過的紀錄都改為待抓'wait'
     log = logfromfolder(path.join(db_path, 'source'), fileinclude=['.pkl'], fileexclude=['log'], direxclude=['stocklist'], dirinclude=[], log=log, fillval='succeed')
     # 比對資料夾內的資料，依照現有存在的資料去比對比較準確，有可能上次抓完，中間有動到資料
+
     for _ in dailycollection['stocklist']['modelis']:
         df = pd.read_html(dailycollection['stocklist']['url'].format(str(_)), encoding='cp950')
         sleepteller()
