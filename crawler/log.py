@@ -1,4 +1,4 @@
-from StevenTricks.fileop import pickleload, picklesave
+from StevenTricks.file_utils import pickleload, picklesave
 from conf import collection, path_dic
 
 from StevenTricks.dfi import periodictable

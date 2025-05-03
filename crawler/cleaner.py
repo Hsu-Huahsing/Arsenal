@@ -7,13 +7,13 @@ Created on Mon Jul 20 21:13:14 2020
 """
 import pandas as pd
 from os.path import join, exists
-from StevenTricks.snt import findbylist
-from StevenTricks.fileop import PathWalk_df, pickleload, logfromfolder, picklesave
+from StevenTricks.convert_utils import findbylist
+from StevenTricks.file_utils import PathWalk_df, pickleload, logfromfolder, picklesave
 from StevenTricks.dfi import findval
 from StevenTricks.warren.twse import Log
 from StevenTricks.warren.conf import db_path, colname_dic, numericol, collection, dropcol, datecol
 from StevenTricks.dbsqlite import tosql_df, readsql_iter
-from StevenTricks.snt import tonumeric_int, changetype_stringtodate
+from StevenTricks.convert_utils import tonumeric_int, changetype_stringtodate
 
 
 productkey = {

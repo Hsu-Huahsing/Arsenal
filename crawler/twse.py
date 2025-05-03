@@ -1,4 +1,4 @@
-from StevenTricks.fileop import pickleload, picklesave, runninginfo, logfromfolder
+from StevenTricks.file_utils import pickleload, picklesave, runninginfo, logfromfolder
 from StevenTricks.dfi import periodictable
 from crawler.log import path_get
 from conf import collection

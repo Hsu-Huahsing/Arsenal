@@ -8,7 +8,7 @@ Created on Fri May 22 23:22:32 2020
 
 from StevenTricks.dfi import findval
 from StevenTricks.netGEN import randomheader
-from StevenTricks.fileop import logfromfolder, picklesave, pickleload
+from StevenTricks.file_utils import logfromfolder, picklesave, pickleload
 from StevenTricks.process import sleepteller
 from StevenTricks.tracker import Log
 from conf import collection, dailycollection, path_dic
