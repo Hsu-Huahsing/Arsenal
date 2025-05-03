@@ -7,44 +7,14 @@ Created on Mon Jul 20 21:13:14 2020
 """
 import pandas as pd
 from os.path import join, exists
+from conf import colname_dic, dropcol, numericol, collection
+
 from StevenTricks.convert_utils import findbylist
 from StevenTricks.file_utils import PathWalk_df, pickleload, logfromfolder, picklesave
 from StevenTricks.dfi import findval
-from StevenTricks.warren.twse import Log
-from StevenTricks.warren.conf import db_path, colname_dic, numericol, collection, dropcol, datecol
 from StevenTricks.dbsqlite import tosql_df, readsql_iter
 from StevenTricks.convert_utils import tonumeric_int, changetype_stringtodate
-
-
-productkey = {
-    "col": ["field"],
-    "value": ["data", "list"],
-    "title": ["title"]
-        }
-
-
-def getkeys(data):
-    productcol = {
-        "col": [],
-        "value": [],
-        "title": [],
-        }
-    for key in sorted(data.keys()):
-        for k, i in productkey.items():
-            i = [key for _ in i if _ in key.lower()]
-            if i:
-                productcol[k] += i
-    return pd.DataFrame(productcol)
-
-
-def productdict(source, key):
-    productdict = {}
-    for col, value, title in key.values:
-        if not source[value]:
-            continue
-        df = pd.DataFrame(data=source[value], columns=source[col])
-        productdict[source[title]] = df
-    return productdict
+from schema_utils import productkey,productdict,getkeys
 
 
 def type1(df, title, subtitle):

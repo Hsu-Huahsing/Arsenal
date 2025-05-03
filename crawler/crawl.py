@@ -10,9 +10,8 @@ from StevenTricks.dfi import findval
 from StevenTricks.netGEN import randomheader
 from StevenTricks.file_utils import logfromfolder, picklesave, pickleload
 from StevenTricks.process import sleepteller
-from StevenTricks.tracker import Log
 from conf import collection, dailycollection, path_dic
-
+from schema_utils import warehouseinit
 from os import path, remove, makedirs
 from traceback import format_exc
 
@@ -24,8 +23,9 @@ import datetime
 dbpath = path_dic["stock_twse_db"]
 
 if __name__ == "__main__":
-    stocklog = Log(dbpath)
+    warehouseinit(dbpath)
     # 每一次被當成主要模組呼叫，都會自動生成倉庫資料夾，為了確保一定有資料夾，所以每次使用都要呼叫一次
+
 
     log = stocklog.findlog('source', 'log.pkl', collection)
     # 先找到source(來源資料夾)，裡面有找log.pkl記錄檔，就知道之前抓到哪裡，可以延續抓下去，如果沒有給定週期表(periodictable)，就會回傳空的dataframe
