@@ -11,7 +11,7 @@ from StevenTricks.netGEN import randomheader
 from StevenTricks.fileop import logfromfolder, picklesave, pickleload
 from StevenTricks.process import sleepteller
 from StevenTricks.tracker import Log
-from conf import collection, db_path, dailycollection
+from conf import collection, dailycollection, path_dic
 
 from os import path, remove, makedirs
 from traceback import format_exc
@@ -21,9 +21,10 @@ import requests as re
 import pandas as pd
 import datetime
 
+dbpath = path_dic["stock_twse_db"]
 
 if __name__ == "__main__":
-    stocklog = Log(db_path)
+    stocklog = Log(dbpath)
     # 每一次被當成主要模組呼叫，都會自動生成倉庫資料夾，為了確保一定有資料夾，所以每次使用都要呼叫一次
 
     log = stocklog.findlog('source', 'log.pkl', collection)
