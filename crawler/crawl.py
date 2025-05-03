@@ -10,14 +10,15 @@ from StevenTricks.dfi import findval, periodictable
 from StevenTricks.netGEN import randomheader
 from StevenTricks.file_utils import logfromfolder, logmaker, picklesave, pickleload, sweep_path, PathWalk_df
 from StevenTricks.process import sleepteller
-from conf import collection, dailycollection, path_dic
+from conf import collection, dailycollection, path_dic, product_col, product_clean
 from crawler.schema_utils import warehouseinit
+from crawler.product_list import product_list
 from os import remove, makedirs
 from os.path import join, exists
 from traceback import format_exc
 
-import sys
 import requests as re
+import sys
 import pandas as pd
 import datetime
 
@@ -58,56 +59,26 @@ if __name__ == "__main__":
     # log處理結束
     print("開始進行網路資料下載")
 
+
+
+
+
+    product_dic = {}
+    # 先進行商品清單下載
     for _ in dailycollection['stocklist']['modelis']:
-        df = pd.read_html(dailycollection['stocklist']['url'].format(str(_)), encoding='cp950')
+        product = product_list(dailycollection['stocklist']['url'].format(str(_)))
+        product_dic[_] = product
+        print(_)
         sleepteller()
-        df = pd.DataFrame(df[0])
-        # read_html是返回list，所以要取出0
-        if df.empty is True:
-            # 代表什麼都沒返回
-            print("stocktable No:{} ___empty crawled result".format(str(_)))
-            continue
-        df.columns = df.loc[0]
-        # 指定第一列為column
-        df = df.drop(0)
-        # 避免跟column重複，所以先刪掉
-        df = df.reset_index(drop=True).reset_index()
-        # 先弄出一列是連續數字出來
-        tablename = [list(set(_)) for _ in df.values if len(set(_)) == 2]
-        # 要找出一整列都是重複的，當作table name，因為剛剛已經用reset_index用出一整數列了，得出的重複值會長這樣[3,重複值]，所以如果是我們要找的重複值，最少會有兩個值，一個是數列，一個是重複值
-        df = df.drop(["index", "Unnamed: 6"], errors="ignore", axis=1)
-        # 把index先刪掉也把用不到的數列先刪掉，欄位清理
+    # 針對商品清單做資料清理
+    for key in product_dic:
+        break
+        product_df = product_dic[key]
 
-        # tablename
-        if len(tablename) > 1:
-            # 如果有兩種以上產品名的情況
-            name_index = [(a, b) for a, b in zip(tablename, tablename[1:] + [[None]])]
-        elif len(tablename) == 1:
-            # 只有一種產品名的情況
-            name_index = [(tablename[0], [None])]
-        else:
-            # 沒有產品名，就單獨一個dataframe，那就不用特別處理直接儲存就好
-            table = "無細項分類的商品{}".format(str(_))
-            datapath = join(dbpath_source, 'stocklist', table, datetime.datetime.today().strftime(table+'_%Y-%m-%d.pkl'))
-            picklesave(df, datapath)
-            continue
-        # 利用同一個row的重複值來判斷商品項目名稱，同時判斷儲存的方式
-        # 對於有產品細項名稱的商品開始做以下特殊處理
-        for nameindex in name_index:
-            start = nameindex[0]
-            end = nameindex[1]
-
-            startname, startint = [_ for _ in start if isinstance(_, str) is True][0], [_ for _ in start if isinstance(_, str) is False][0]
-            endint = [_ for _ in end if isinstance(_, str) is False][0]
-            # 先抓出起始的值和尾端值然後用slice來做切割，把資料分段儲存進table
-
-            if end[0] is None:
-                df_sub = df[startint + 1:]
-            else:
-                df_sub = df[startint + 1:endint]
-
-            datapath = join(dbpath_source, 'stocklist', startname, datetime.datetime.today().strftime(startname + str(_) + '_%Y-%m-%d.pkl'))
-            picklesave(df_sub, datapath)
+        product_df = product_df.rename(columns=product_col)
+        product_df = product_df.replace({"\u3000": ""}, regex=True)
+        product_df["代號"] = product_df["國際證券辨識號碼(ISIN Code)"].str.slice(product_col[key][0],product_col[key][1])
+        product_dic[key] = product_df
 
     # for ind, col in findval(log.drop(['每日收盤行情', '信用交易統計', '市場成交資訊', '三大法人買賣金額統計表', '三大法人買賣超日報', '個股日本益比、殖利率及股價淨值比', '信用額度總量管制餘額表', '當日沖銷交易標的及成交量值', "每月當日沖銷交易標的及統計", '外資及陸資投資持股統計'], axis=1), 'wait'):
     for ind, col in findval(log, 'wait'):
