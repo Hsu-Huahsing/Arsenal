@@ -6,28 +6,17 @@ Created on Fri May 22 23:22:32 2020
 @author: mac
 """
 
-from StevenTricks.dfi import findval, periodictable, DataFrameMerger
-from StevenTricks.netGEN import randomheader
-from StevenTricks.file_utils import logfromfolder, logmaker, picklesave, pickleload, sweep_path, PathWalk_df
+from StevenTricks.dfi import periodictable, DataFrameMerger
+from StevenTricks.file_utils import logfromfolder,  picklesave, pickleload, sweep_path, PathWalk_df
 from StevenTricks.process import sleepteller
-from conf import collection, dailycollection, path_dic, product_col, product_clean
-from crawler.schema_utils import warehouseinit
+from conf import collection, dailycollection, product_col, product_clean,dbpath,dbpath_source,dbpath_log,dbpath_errorlog,dbpath_productlist
+from schema_utils import warehouseinit
 from crawler.product_list import product_list
-from crawler.run_crawler_task import main
-from os import remove, makedirs
-from os.path import join, exists
-from traceback import format_exc
+from crawler.stock import main
 
-import requests as re
-import sys
 import pandas as pd
 import datetime
 
-dbpath = path_dic["stock_twse_db"]
-dbpath_source = join(dbpath, "source")
-dbpath_log = join(dbpath_source, "log", "log.pkl")
-dbpath_errorlog = join(dbpath_source, "log", "errorlog.pkl")
-dbpath_productlist = join(dbpath_source, "productlist.pkl")
 log_info = sweep_path(dbpath_log)
 errorlog_info = sweep_path(dbpath_errorlog)
 productlist_info = sweep_path(dbpath_productlist)
@@ -55,9 +44,9 @@ if __name__ == "__main__":
     print("LOG讀取成功")
     print("開始更新LOG")
     # 先盤點資料
-    dbpath_lis = PathWalk_df(dbpath_source, [], ["log"], [], [])
+    dbpath_list = PathWalk_df(dbpath_source, [], ["log"], [], [])
     # 再更新log檔
-    log = logfromfolder(dbpath_lis, log=log, fillval='succeed')
+    log = logfromfolder(dbpath_list, log=log, fillval='succeed')
     # 比對資料夾內的資料，依照現有存在的資料去比對比較準確，有可能上次抓完，中間有動到資料
     print("Log檔案更新結束\nLog程序處理結束")
     # log處理結束
