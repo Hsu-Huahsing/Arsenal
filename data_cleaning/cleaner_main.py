@@ -1,8 +1,10 @@
-
+import pandas as pd
 from data_cleaning.fundic_mapping import fundic
 from StevenTricks.convert_utils import findbylist
-from conf import collection,dbpath,dbpath_productlist,dbpath_log,dbpath_source
+from conf import collection,dbpath,dbpath_productlist,dbpath_log,dbpath_source,dbpath_cleaned
 from StevenTricks.file_utils import logfromfolder,  picklesave, pickleload, sweep_path, PathWalk_df
+from os.path import join
+from schema_utils import productdict, getkeys
 
 def cleaner(product, title):
     """
@@ -26,8 +28,24 @@ def cleaner(product, title):
             print(f"[Error] Failed cleaning {title} - {subtitle} with error: {e}")
             continue
     return result
+
 if __name__ == "__main__":
     dbpath_list = PathWalk_df(dbpath_source, [], ["log"], [], [".pkl"])
+    for file , path in dbpath_list[["file","path"]].values:
+        if file == "productlist.pkl":
+            productlist = pickleload(path)
+            picklesave(productlist,join(dbpath_cleaned,file))
+            continue
+        file_data = pickleload(path)
+        file_info = sweep_path(path)
+        clean_type = fundic[file_info["parentdir"]][file.split("_")[0]]
+        data = pd.DataFrame(file_data["data"],columns=file_data["fields"])
+        data = clean_type(data,file_info["parentdir"],file.split("_")[0])
 
+        data = productdict(file_data, getkeys(file_data))
+        clean_manager = cleaner(data, file.split("_")[0])
+        file_data.keys()
+        file_data["data"]
+        print(file,path)
 
 

@@ -33,5 +33,6 @@ def rename_columns_batch(df, replace_pairs):
 
 def safe_numeric_convert(df, cols):
     """將指定欄位轉成數值型態，無法轉換設為 NaN"""
+    cols = [_ for _ in cols if _ in df]
     df[cols] = df[cols].apply(pd.to_numeric, errors='coerce')
     return df

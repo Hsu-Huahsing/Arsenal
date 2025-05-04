@@ -8,6 +8,7 @@ path_dic = {
 
 dbpath = path_dic["stock_twse_db"]
 dbpath_source = join(dbpath, "source")
+dbpath_cleaned = join(dbpath, "cleaned")
 dbpath_log = join(dbpath_source, "log", "log.pkl")
 dbpath_errorlog = join(dbpath_source, "log", "errorlog.pkl")
 dbpath_productlist = join(dbpath_source, "productlist.pkl")
