@@ -1,5 +1,5 @@
 
-from fundic_mapping import fundic
+from data_cleaning.fundic_mapping import fundic
 from StevenTricks.convert_utils import findbylist
 from conf import collection,dbpath,dbpath_productlist,dbpath_log,dbpath_source
 from StevenTricks.file_utils import logfromfolder,  picklesave, pickleload, sweep_path, PathWalk_df
@@ -27,7 +27,7 @@ def cleaner(product, title):
             continue
     return result
 if __name__ == "__main__":
-    dbpath_list = PathWalk_df(dbpath_source, [], ["log"], [], [])
+    dbpath_list = PathWalk_df(dbpath_source, [], ["log"], [], [".pkl"])
 
 
 
