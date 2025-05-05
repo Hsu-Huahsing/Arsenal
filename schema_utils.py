@@ -45,3 +45,11 @@ def warehouseinit(path):
     """Initialize warehouse folder with 'source' and 'cleaned' subfolders."""
     for sub in ['source', 'cleaned']:
         makedirs(Path(path) / sub, exist_ok=True)
+
+
+def safe_frameup_data(data_dict={}, fields=[]):
+    data = pd.DataFrame(data_dict)
+    col_other = list(range(0,len(data.columns)-len(fields),1))
+    data.columns = fields + col_other
+    data = data.drop(col_other, axis=1)
+    return data

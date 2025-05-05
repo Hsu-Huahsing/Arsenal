@@ -4,7 +4,7 @@ from StevenTricks.convert_utils import findbylist
 from conf import collection,dbpath,dbpath_productlist,dbpath_log,dbpath_source,dbpath_cleaned
 from StevenTricks.file_utils import logfromfolder,  picklesave, pickleload, sweep_path, PathWalk_df
 from os.path import join
-from schema_utils import productdict, getkeys
+from schema_utils import productdict, getkeys, safe_frameup_data
 
 def cleaner(product, title):
     """
@@ -39,13 +39,15 @@ if __name__ == "__main__":
         file_data = pickleload(path)
         file_info = sweep_path(path)
         clean_type = fundic[file_info["parentdir"]][file.split("_")[0]]
-        data = pd.DataFrame(file_data["data"],columns=file_data["fields"])
+        data = safe_frameup_data(file_data["data"], file_data["fields"])
+
         data = clean_type(data,file_info["parentdir"],file.split("_")[0])
 
         data = productdict(file_data, getkeys(file_data))
         clean_manager = cleaner(data, file.split("_")[0])
         file_data.keys()
         file_data["data"]
+        file_data["title"]
         print(file,path)
 
 

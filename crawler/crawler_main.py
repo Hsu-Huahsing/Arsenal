@@ -21,6 +21,7 @@ log_info = sweep_path(dbpath_log)
 errorlog_info = sweep_path(dbpath_errorlog)
 productlist_info = sweep_path(dbpath_productlist)
 
+
 if __name__ == "__main__":
     warehouseinit(dbpath)
     # 每一次被當成主要模組呼叫，都會自動生成倉庫資料夾，為了確保一定有資料夾，所以每次使用都要呼叫一次
