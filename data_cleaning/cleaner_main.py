@@ -39,9 +39,11 @@ if __name__ == "__main__":
         file_data = pickleload(path)
         file_info = sweep_path(path)
         clean_type = fundic[file_info["parentdir"]][file.split("_")[0]]
-        data = safe_frameup_data(file_data["data"], file_data["fields"])
+        # 因為有時候裡面的欄位(fields)數量和實際的data長度不一樣，會出錯，所以要用safe的方式去做出dataframe，自動先做出一樣長度的架構，再把多餘長度的欄位刪掉，未來如果發現有誤刪，就要再修正
+        data_raw = safe_frameup_data(file_data["data"], file_data["fields"])
 
-        data = clean_type(data,file_info["parentdir"],file.split("_")[0])
+        data_cleaned = clean_type(data_raw,file_info["parentdir"],file.split("_")[0],file_name=file)
+        break
 
         data = productdict(file_data, getkeys(file_data))
         clean_manager = cleaner(data, file.split("_")[0])
