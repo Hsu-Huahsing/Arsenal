@@ -35,13 +35,13 @@ def fraameup_safe(data_dict):
 
 
 def data_cleaned_pre(data_dict):
-    if "filds" in data_dict:
-        data_dict["fields"] = [colname_dic[_] for _ in data_dict["fields"]]
+    if "fields" in data_dict:
+        data_dict["fields"] = [colname_dic.get(_,_) for _ in data_dict["fields"]]
     if "creditFields" in data_dict:
-        data_dict["creditFields"] = [colname_dic[_] for _ in data_dict["creditFields"]]
+        data_dict["creditFields"] = [colname_dic.get(_,_) for _ in data_dict["creditFields"]]
     if "creditList" in data_dict:
         for credit in data_dict["creditList"]:
-            data_dict["creditList"][credit] = [colname_dic[_] for _ in data_dict["creditList"][credit]]
+            data_dict["creditList"][credit] = [colname_dic.get(_,_) for _ in data_dict["creditList"][credit]]
     return data_dict
 
 def data_cleaned_df(df, item, subitem, date):

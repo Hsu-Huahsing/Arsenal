@@ -42,12 +42,10 @@ if __name__ == "__main__":
         file_data["file_name"] = file
         file_data["item"] = file_info["parentdir"]
         file_data["subitem"] = file.split("_")[0]
+        file_data["data_cleaned"] = {}
         data_cleaned_pre(file_data)
 
         fraameup_safe(file_data)
-
-
-        break
 
         if "creditList" in file_data:
             file_data["data_cleaned"]["creditTitle"] = pd.DataFrame(file_data["creditList"], columns=file_data["creditFields"])
