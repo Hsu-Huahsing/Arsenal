@@ -1,20 +1,6 @@
 
 import pandas as pd
-
-
-def split_column_parentheses(df, keep_right=False, right_colname="unit"):
-    """將每欄資料以 '(' 拆分成左（主）與右（副），副欄位名稱可自訂。"""
-    res = []
-    for subcol in df.columns:
-        temp = df[subcol].str.split(r'\(', expand=True)
-        if keep_right:
-            temp.columns = [subcol, right_colname]
-        else:
-            temp.columns = [subcol]
-        res.append(temp)
-    result = pd.concat(res, axis=1)
-    return result
-
+from conf import colname_dic, dropcol, numericol
 
 def convert_date_column(df, cols, mode=4):
     """將指定欄位轉為 datetime 格式（可指定格式處理邏輯）"""
@@ -36,3 +22,53 @@ def safe_numeric_convert(df, cols):
     cols = [_ for _ in cols if _ in df]
     df[cols] = df[cols].apply(pd.to_numeric, errors='coerce')
     return df
+
+
+def fraameup_safe(data_dict):
+    title = data_dict["title"].split(" ")[1]
+    df = pd.DataFrame(data_dict["data"])
+    col_diff = list(range(0, df.shape[1] - len(data_dict["fields"])))
+    col = data_dict["fields"] + col_diff
+    df.columns = col
+    data_dict["data_cleaned"][title] = df.drop(columns=col_diff)
+    return data_dict
+
+
+def data_cleaned_pre(data_dict):
+    if "filds" in data_dict:
+        data_dict["fields"] = [colname_dic[_] for _ in data_dict["fields"]]
+    if "creditFields" in data_dict:
+        data_dict["creditFields"] = [colname_dic[_] for _ in data_dict["creditFields"]]
+    if "creditList" in data_dict:
+        for credit in data_dict["creditList"]:
+            data_dict["creditList"][credit] = [colname_dic[_] for _ in data_dict["creditList"][credit]]
+    return data_dict
+
+def data_cleaned_df(df, item, subitem, date):
+    df.index = [date]*df.shape[0]
+    df = df.replace({",": "", r'\)': '', r'\(': '_'}, regex=True)
+    df = df.drop(columns=dropcol, errors='ignore')
+    cols = numericol[item][subitem]
+    df = safe_numeric_convert(df, cols)
+    return df
+
+def data_cleaned_groups(data_dict):
+    title = data_dict["title"].split(" ")[1]
+    df_dict = {}
+    df_main = pd.DataFrame(data_dict["data"])
+    df_col = []
+    cnts = 0
+    for dict_temp in data_dict["groups"]:
+        cnts += 1
+        if not df_col:
+            df_col = list(range(0, dict_temp["start"]))
+        if cnts == len(data_dict["groups"]):
+            df_temp = pd.DataFrame(df_main.iloc[:, df_col + list(range(dict_temp["start"], len(data_dict["fields"])))])
+        else:
+            df_temp = pd.DataFrame(
+                df_main.iloc[:, df_col + list(range(dict_temp["start"], dict_temp["start"] + dict_temp["span"]))])
+        col = [data_dict["fields"][_] for _ in df_temp.columns]
+        df_temp.columns = col
+        df_dict[dict_temp["title"]] = df_temp
+    data_dict["data_cleaned"][title] = df_dict
+    return data_dict

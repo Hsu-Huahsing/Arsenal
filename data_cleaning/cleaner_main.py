@@ -1,10 +1,11 @@
 import pandas as pd
 from data_cleaning.fundic_mapping import fundic
+from data_cleaning.cleaning_utils import data_cleaned_pre, data_cleaned_df, data_cleaned_groups, fraameup_safe
 from StevenTricks.convert_utils import findbylist
 from conf import collection,dbpath,dbpath_productlist,dbpath_log,dbpath_source,dbpath_cleaned
 from StevenTricks.file_utils import logfromfolder,  picklesave, pickleload, sweep_path, PathWalk_df
 from os.path import join
-from schema_utils import productdict, getkeys, safe_frameup_data
+
 
 def cleaner(product, title):
     """
@@ -38,12 +39,41 @@ if __name__ == "__main__":
             continue
         file_data = pickleload(path)
         file_info = sweep_path(path)
-        clean_type = fundic[file_info["parentdir"]][file.split("_")[0]]
-        # 因為有時候裡面的欄位(fields)數量和實際的data長度不一樣，會出錯，所以要用safe的方式去做出dataframe，自動先做出一樣長度的架構，再把多餘長度的欄位刪掉，未來如果發現有誤刪，就要再修正
-        data_raw = safe_frameup_data(file_data["data"], file_data["fields"])
+        file_data["file_name"] = file
+        file_data["item"] = file_info["parentdir"]
+        file_data["subitem"] = file.split("_")[0]
+        data_cleaned_pre(file_data)
 
-        data_cleaned = clean_type(data_raw,file_info["parentdir"],file.split("_")[0],file_name=file)
+        fraameup_safe(file_data)
+
+
         break
+
+        if "creditList" in file_data:
+            file_data["data_cleaned"]["creditTitle"] = pd.DataFrame(file_data["creditList"], columns=file_data["creditFields"])
+
+        if "groups" in file_data:
+            file_data = data_cleaned_groups(file_data)
+
+        for key in file_data["data_cleaned"]:
+            data_cleaned_df(file_data["data_cleaned"][key])
+
+
+        break
+
+        test = pickleload(r"/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock/twse/source/信用交易統計/信用交易統計_2023-04-24.pkl")
+
+
+
+
+
+
+        test1= pickleload(
+            r"/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock/twse/source/發行量加權股價指數歷史資料/發行量加權股價指數歷史資料_2023-05-01.pkl")
+        if not test["data"]:print("ok")
+
+
+
 
         data = productdict(file_data, getkeys(file_data))
         clean_manager = cleaner(data, file.split("_")[0])

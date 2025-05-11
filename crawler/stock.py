@@ -73,7 +73,8 @@ class CrawlerTask:
 
         # 伺服器回應正常（200 OK）
         if res.status_code == self.cfg.request_module.codes.ok:
-            if data.get('stat') == 'OK':
+            # stat網頁回應是ok，還有回應確實有拿到資料，data不能是空的，這樣才是正確的回應，如果只是連線ok但資料是空的，就代表那天放假
+            if data.get('stat') == 'OK' and data.get('data'):
                 self.cfg.log.loc[self.cfg.log.index == ind, col] = 'succeed'
             else:
                 self.cfg.log.loc[self.cfg.log.index == ind, col] = 'close'
@@ -90,7 +91,7 @@ class CrawlerTask:
         filename = join(datapath, f"{col}_{ind.date()}.pkl")
         self.cfg.picklesave(data, filename)
 
-        # 若是月頻，清除當月舊檔案
+        # 若資料頻率是月頻，清除當月舊檔案
         if crawlerdic.get('freq') == 'M':
             self._clean_monthly_files(ind, col, datapath)
 

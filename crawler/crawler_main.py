@@ -9,7 +9,7 @@ Created on Fri May 22 23:22:32 2020
 from StevenTricks.dfi import periodictable, DataFrameMerger
 from StevenTricks.file_utils import logfromfolder,  picklesave, pickleload, sweep_path, PathWalk_df
 from StevenTricks.process import sleepteller
-from conf import collection, dailycollection, product_col, product_clean,dbpath,dbpath_source,dbpath_log,dbpath_errorlog,dbpath_productlist
+from conf import collection, dailycollection, colname_dic, product_clean,dbpath,dbpath_source,dbpath_log,dbpath_errorlog,dbpath_productlist
 from schema_utils import warehouseinit
 from crawler.product_list import product_list
 from crawler.stock import main
@@ -62,10 +62,10 @@ if __name__ == "__main__":
     # 針對商品清單做資料清理
     for key in product_dic:
         product_df = product_dic[key]
-        product_df = product_df.rename(columns=product_col)
+        product_df = product_df.rename(columns=colname_dic)
         product_df = product_df.replace({"\u3000": ""}, regex=True)
-        if "國際證券辨識號碼(ISIN Code)" in product_df:
-            product_df["代號"] = product_df["國際證券辨識號碼(ISIN Code)"].str.slice(product_clean["code"][key][0],product_clean["code"][key][1])
+        if "ISINCode" in product_df:
+            product_df["代號"] = product_df["ISINCode"].str.slice(product_clean["code"][key][0],product_clean["code"][key][1])
         product_dic[key] = product_df
 
     product = pd.concat(list(product_dic.values()),axis=0)
