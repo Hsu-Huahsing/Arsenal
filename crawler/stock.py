@@ -170,7 +170,7 @@ def main(collection, log, errorlog, dbpath_source, dbpath_log, dbpath_errorlog):
     crawler = CrawlerTask(config)
 
     for ind, col in findval(log, 'wait'):
-        crawler.run_task(ind, col)
+        crawler.run_task(pd.to_datetime(ind), col)
 
 # === 可執行介面 ===
 if __name__ == '__main__':

@@ -34,15 +34,16 @@ if __name__ == "__main__":
             latest_log = periodictable(collection, datemin=log.index.max()+datetime.timedelta(days=1))
             # 從上一次創建log的最新天數開始，所以要加一天，然後開始創建新的table
             log = pd.concat([log, latest_log])
+        print("LOG讀取成功")
     else:
         log = periodictable(collection)
+        print("LOG重置成功")
     # 不管有沒有log，在爬蟲啟動之前都會根據目前資料夾的資料來更新log，確保抓取沒有遺漏
     # 再判斷有沒有errorlog
     if errorlog_info["exists"] is True:
         errorlog = pickleload(dbpath_errorlog)
     else:
         errorlog = pd.DataFrame()
-    print("LOG讀取成功")
     print("開始更新LOG")
     # 先盤點資料
     dbpath_list = PathWalk_df(dbpath_source, [], ["log"], [], [])
