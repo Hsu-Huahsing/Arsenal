@@ -1,8 +1,8 @@
 import pandas as pd
 from data_cleaning.fundic_mapping import fundic
-from data_cleaning.cleaning_utils import data_cleaned_pre, data_cleaned_df, data_cleaned_groups, fraameup_safe
-from StevenTricks.convert_utils import findbylist
-from conf import collection,dbpath,dbpath_productlist,dbpath_log,dbpath_source,dbpath_cleaned
+from data_cleaning.cleaning_utils import data_cleaned_pre, data_cleaned_df, data_cleaned_groups, frameup_safe
+from StevenTricks.convert_utils import findbylist,changetype_stringtodate
+from conf import collection,dbpath,dbpath_productlist,dbpath_log,dbpath_source,dbpath_cleaned,datecol
 from StevenTricks.file_utils import logfromfolder,  picklesave, pickleload, sweep_path, PathWalk_df
 from os.path import join
 
@@ -45,7 +45,7 @@ if __name__ == "__main__":
         file_data["data_cleaned"] = {}
         data_cleaned_pre(file_data)
 
-        fraameup_safe(file_data)
+        frameup_safe(file_data)
 
         if "creditList" in file_data:
             file_data["data_cleaned"]["creditTitle"] = pd.DataFrame(file_data["creditList"], columns=file_data["creditFields"])
@@ -54,16 +54,16 @@ if __name__ == "__main__":
             file_data = data_cleaned_groups(file_data)
 
         for key in file_data["data_cleaned"]:
-            data_cleaned_df(file_data["data_cleaned"][key])
+            file_data["data_cleaned"][key] = data_cleaned_df(file_data["data_cleaned"][key],file_data["item"],file_data["subitem"],date=pd.to_datetime(file_data["date"]))
 
 
         break
 
-        test = pickleload(r"/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock/twse/source/信用交易統計/信用交易統計_2023-04-24.pkl")
-
-
-
-
+        test = pickleload(r"/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock/twse/source/發行量加權股價指數歷史資料/發行量加權股價指數歷史資料_2023-04-30.pkl")
+        test["data_cleaned"]={}
+        frameup_safe(test)
+        if "date" in test["data_cleaned"]["發行量加權股價指數歷史資料"]:
+            test["data_cleaned"]["發行量加權股價指數歷史資料"].index = pd.to_datetime(test["data_cleaned"]["發行量加權股價指數歷史資料"]["日期"])
 
 
         test1= pickleload(

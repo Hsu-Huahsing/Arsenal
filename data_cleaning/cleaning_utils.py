@@ -1,7 +1,7 @@
 
 import pandas as pd
-from conf import colname_dic, dropcol, numericol
-
+from conf import colname_dic, dropcol, numericol, datecol
+from StevenTricks.convert_utils import changetype_stringtodate
 def convert_date_column(df, cols, mode=4):
     """將指定欄位轉為 datetime 格式（可指定格式處理邏輯）"""
     df[cols] = df[cols].apply(pd.to_datetime, errors='coerce')
@@ -24,7 +24,7 @@ def safe_numeric_convert(df, cols):
     return df
 
 
-def fraameup_safe(data_dict):
+def frameup_safe(data_dict):
     title = data_dict["title"].split(" ")[1]
     df = pd.DataFrame(data_dict["data"])
     col_diff = list(range(0, df.shape[1] - len(data_dict["fields"])))
@@ -45,11 +45,16 @@ def data_cleaned_pre(data_dict):
     return data_dict
 
 def data_cleaned_df(df, item, subitem, date):
-    df.index = [date]*df.shape[0]
     df = df.replace({",": "", r'\)': '', r'\(': '_'}, regex=True)
     df = df.drop(columns=dropcol, errors='ignore')
     cols = numericol[item][subitem]
     df = safe_numeric_convert(df, cols)
+    date_col = [_ for _ in datecol if _ in df]
+    if date_col:
+        df = changetype_stringtodate(df, date_col, mode=3)
+        df = df.set_index(datecol, drop=True)
+    else :
+        df.index = [date]*df.shape[0]
     return df
 
 def data_cleaned_groups(data_dict):
