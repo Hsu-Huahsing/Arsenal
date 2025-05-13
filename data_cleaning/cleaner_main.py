@@ -1,11 +1,13 @@
 import pandas as pd
+from cytoolz import remove
+
 from data_cleaning.fundic_mapping import fundic
-from data_cleaning.cleaning_utils import data_cleaned_pre, data_cleaned_df, data_cleaned_groups, frameup_safe
+from data_cleaning.cleaning_utils import data_cleaned_pre, data_cleaned_df, data_cleaned_groups, frameup_safe,dict_extract
 from StevenTricks.convert_utils import findbylist,changetype_stringtodate
 from conf import collection,dbpath,dbpath_productlist,dbpath_log,dbpath_source,dbpath_cleaned,datecol
 from StevenTricks.file_utils import logfromfolder,  picklesave, pickleload, sweep_path, PathWalk_df
 from os.path import join
-
+from pathlib import Path
 
 def cleaner(product, title):
     """
@@ -37,13 +39,34 @@ if __name__ == "__main__":
             productlist = pickleload(path)
             picklesave(productlist,join(dbpath_cleaned,file))
             continue
-        file_data = pickleload(path)
         file_info = sweep_path(path)
-        file_data["file_name"] = file
-        file_data["item"] = file_info["parentdir"]
-        file_data["subitem"] = file.split("_")[0]
-        file_data["data_cleaned"] = {}
-        data_cleaned_pre(file_data)
+        file_data = pickleload(path)
+
+        dict_list = []
+
+        if "tables" in file_data:
+            for table in file_data["tables"]:
+                if table:
+                    dict_list.append(dict_extract(table,date=file_data["date"]))
+        else:
+            dict_list.append(dict_extract(file_data, date=file_data["date"]))
+
+        if "creditTitle" in file_data:
+            dict_list.append(dict_extract(file_data, title="creditTitle", fields="creditFields", data="creditList",  date=file_data["date"]))
+
+        if not dict_list:
+            continue
+        # 用抓table的方式，把固定的格式 title fields data groups(可有可無) date 抓出來 存成dict 在做後續的處理
+
+        for dict_df in dict_list:
+
+
+
+            file_data["file_name"] = file
+            file_data["item"] = file_info["parentdir"]
+            file_data["subitem"] = file.split("_")[0]
+            file_data["data_cleaned"] = {}
+            data_cleaned_pre(file_data)
 
         frameup_safe(file_data)
 
@@ -59,7 +82,9 @@ if __name__ == "__main__":
 
         break
 
-        test = pickleload(r"/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock/twse/source/發行量加權股價指數歷史資料/發行量加權股價指數歷史資料_2023-04-30.pkl")
+        test = pickleload(r"/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock/twse/source/發行量加權股價指數歷史資料/發行量加權股價指數歷史資料_2023-05-02.pkl")
+
+
         test["data_cleaned"]={}
         frameup_safe(test)
         if "date" in test["data_cleaned"]["發行量加權股價指數歷史資料"]:

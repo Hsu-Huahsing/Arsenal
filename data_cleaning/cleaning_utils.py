@@ -2,10 +2,17 @@
 import pandas as pd
 from conf import colname_dic, dropcol, numericol, datecol
 from StevenTricks.convert_utils import changetype_stringtodate
-def convert_date_column(df, cols, mode=4):
-    """將指定欄位轉為 datetime 格式（可指定格式處理邏輯）"""
-    df[cols] = df[cols].apply(pd.to_datetime, errors='coerce')
-    return df
+
+
+def dict_extract(dict_in, title="title", fields="fields", data="data", group="groups", date=None):
+    out_dict = {}
+    out_dict["title"] = dict_in[title]
+    out_dict["fields"] = dict_in[fields]
+    out_dict["data"] = dict_in[data]
+    out_dict["date"] = date
+    if "groups" in dict_in:
+        out_dict["groups"] = dict_in[group]
+    return out_dict
 
 
 def rename_columns_batch(df, replace_pairs):
@@ -25,6 +32,7 @@ def safe_numeric_convert(df, cols):
 
 
 def frameup_safe(data_dict):
+    # 如果沒有groups就直接用這個，和groups會返回一樣的東西
     title = data_dict["title"].split(" ")[1]
     df = pd.DataFrame(data_dict["data"])
     col_diff = list(range(0, df.shape[1] - len(data_dict["fields"])))
