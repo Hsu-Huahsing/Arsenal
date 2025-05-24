@@ -32,6 +32,7 @@ def cleaner(product, title):
 if __name__ == "__main__":
     dbpath_list = PathWalk_df(dbpath_source, [], ["log"], [], [".pkl"])
     for file , path in dbpath_list[["file","path"]].values:
+        print(file,path)
         if file == "productlist.pkl":
             productlist = pickleload(path)
             picklesave(productlist,join(dbpath_cleaned,file))
@@ -65,8 +66,7 @@ if __name__ == "__main__":
             if "groups" in dict_df:
                 dict_df = data_cleaned_groups(dict_df)
 
-            for key in dict_df["data_cleaned"]:
-                dict_df["data_cleaned"] = data_cleaned_df(dict_df["data_cleaned"],dict_df["item"],dict_df["subitem"],date=pd.to_datetime(dict_df["date"]))
+            dict_df["data_cleaned"] = data_cleaned_df(dict_df["data_cleaned"],dict_df["item"],dict_df["subitem"],date=pd.to_datetime(dict_df["date"]))
 
             tosql_df(df=dict_df["data_cleaned"], dbpath=join(dbpath_cleaned, dict_df["item"]), table=dict_df["subitem"], pk=[])
             # 放進db，用最簡單的模式，直覺型放入，沒有用adapter

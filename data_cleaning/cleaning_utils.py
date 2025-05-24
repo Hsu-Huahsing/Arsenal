@@ -33,7 +33,6 @@ def safe_numeric_convert(df, cols):
 
 def frameup_safe(data_dict):
     # 如果沒有groups就直接用這個，和groups會返回一樣的東西
-    title = data_dict["title"].split(" ")[1]
     df = pd.DataFrame(data_dict["data"])
     col_diff = list(range(0, df.shape[1] - len(data_dict["fields"])))
     col = data_dict["fields"] + col_diff
@@ -56,7 +55,6 @@ def data_cleaned_df(df, item, subitem, date):
     return df
 
 def data_cleaned_groups(data_dict):
-    title = data_dict["title"].split(" ")[1]
     df_dict = {}
     df_main = pd.DataFrame(data_dict["data"])
     df_col = []
