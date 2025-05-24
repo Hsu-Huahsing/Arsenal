@@ -31,6 +31,16 @@ if __name__ == "__main__":
         # 有log還要判斷是不是最新的
         if datetime.date.today() not in log.index:
             print("{} not in log index, updating the log table".format(str(datetime.date.today())))
+            # log.index = pd.to_datetime(log.index)
+            # for i in log.index:
+            #     print(i)
+            #     if i == "Store":continue
+            #     pd.to_datetime(i)
+            # a=log.loc[log.index.isin(["Store","ass"]),:]
+            # log.loc[log.index==pd.to_datetime("1990-01-31"),"ddd"]="dddd"
+            # log.loc["ass"]
+            # log["ddd"].unique()
+            # type(log.index[2])
             latest_log = periodictable(collection, datemin=log.index.max()+datetime.timedelta(days=1))
             # 從上一次創建log的最新天數開始，所以要加一天，然後開始創建新的table
             log = pd.concat([log, latest_log])

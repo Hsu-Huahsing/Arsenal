@@ -47,6 +47,8 @@ class CrawlerTask:
         # 建立儲存目錄
         datapath = join(self.cfg.dbpath_source, col)
         makedirs(datapath, exist_ok=True)
+        # print("first")
+        # print(type(ind))
         print(ind, col)
 
         try:
@@ -76,8 +78,15 @@ class CrawlerTask:
             # stat網頁回應是ok，還有回應確實有拿到資料，data不能是空的，這樣才是正確的回應，如果只是連線ok但資料是空的，就代表那天放假
             if data.get('stat') == 'OK' and data.get('data'):
                 self.cfg.log.loc[self.cfg.log.index == ind, col] = 'succeed'
+
+                print(type(ind))
+                print(ind)
+                print(pd.to_datetime(ind))
             else:
                 self.cfg.log.loc[self.cfg.log.index == ind, col] = 'close'
+                print(type(ind))
+                print(ind)
+                print(pd.to_datetime(ind))
                 self.cfg.picklesave(self.cfg.log, self.cfg.dbpath_log)
                 return
         else:
@@ -113,7 +122,11 @@ class CrawlerTask:
         print(format_exc())
         print("===============")
         print(e)
+        print(type(ind))
+        print(ind)
+        print(pd.to_datetime(ind))
         self.cfg.log.loc[self.cfg.log.index == ind, col] = 'request error'
+        print(ind)
         errordic = {
             'crawlerdic': crawlerdic,
             'errormessage1': format_exc(),
@@ -129,6 +142,9 @@ class CrawlerTask:
     def _handle_status_error(self, ind, col, crawlerdic, res):
         print("Unknowned error")
         print("===============")
+        print(type(ind))
+        print(ind)
+        print(pd.to_datetime(ind))
         self.cfg.log.loc[self.cfg.log.index == ind, col] = 'result error'
         errordic = {
             'crawlerdic': crawlerdic,
