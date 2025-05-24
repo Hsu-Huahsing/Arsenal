@@ -36,6 +36,7 @@ def frameup_safe(data_dict):
     df = pd.DataFrame(data_dict["data"])
     col_diff = list(range(0, df.shape[1] - len(data_dict["fields"])))
     col = data_dict["fields"] + col_diff
+    col = [colname_dic.get(_,_) for _ in col]
     df.columns = col
     data_dict["data_cleaned"] = df.drop(columns=col_diff)
     return data_dict

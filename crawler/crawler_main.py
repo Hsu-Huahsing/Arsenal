@@ -31,6 +31,7 @@ if __name__ == "__main__":
         # 有log還要判斷是不是最新的
         if datetime.date.today() not in log.index:
             print("{} not in log index, updating the log table".format(str(datetime.date.today())))
+            # log.loc[log.index=="1999-07-25",:]
             # log.index = pd.to_datetime(log.index)
             # for i in log.index:
             #     print(i)

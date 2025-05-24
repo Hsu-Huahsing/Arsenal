@@ -2,9 +2,11 @@ import pandas as pd
 from data_cleaning.cleaning_utils import data_cleaned_df, data_cleaned_groups, frameup_safe,dict_extract
 from StevenTricks.convert_utils import findbylist
 from StevenTricks.dbsqlite import tosql_df
-from conf import collection,dbpath_source,dbpath_cleaned
+from conf import collection,dbpath_source,dbpath_cleaned,dbpath_cleaned_log
 from StevenTricks.file_utils import picklesave, pickleload, sweep_path, PathWalk_df
 from os.path import join
+from itertools import chain
+
 
 def cleaner(product, title):
     """
@@ -29,8 +31,18 @@ def cleaner(product, title):
             continue
     return result
 
+
+log_info = sweep_path(dbpath_cleaned_log)
+
 if __name__ == "__main__":
     dbpath_list = PathWalk_df(dbpath_source, [], ["log"], [], [".pkl"])
+    if log_info["exists"] is True:
+        log = pickleload(dbpath_cleaned_log)
+        log = log.values.tolist()
+        log = list(chain.from_iterable(log))
+        dbpath_list = dbpath_list.loc[~dbpath_list["file"].isin(log),:]
+
+
     for file , path in dbpath_list[["file","path"]].values:
         print(file,path)
         if file == "productlist.pkl":
@@ -49,8 +61,9 @@ if __name__ == "__main__":
         else:
             dict_list.append(dict_extract(file_data, date=file_data["date"]))
 
-        if "creditTitle" in file_data:
-            dict_list.append(dict_extract(file_data, title="creditTitle", fields="creditFields", data="creditList",  date=file_data["date"]))
+        if "creditTitle" in file_data :
+            if file_data["creditTitle"] is not None:
+                dict_list.append(dict_extract(file_data, title="creditTitle", fields="creditFields", data="creditList",  date=file_data["date"]))
 
         if not dict_list:
             continue
@@ -68,7 +81,7 @@ if __name__ == "__main__":
 
             dict_df["data_cleaned"] = data_cleaned_df(dict_df["data_cleaned"],dict_df["item"],dict_df["subitem"],date=pd.to_datetime(dict_df["date"]))
 
-            tosql_df(df=dict_df["data_cleaned"], dbpath=join(dbpath_cleaned, dict_df["item"]), table=dict_df["subitem"], pk=[])
+            tosql_df(df=dict_df["data_cleaned"], dbpath=join(dbpath_cleaned, dict_df["item"] + ".db"), table=dict_df["subitem"], pk=[])
             # 放進db，用最簡單的模式，直覺型放入，沒有用adapter
         #
         # break
