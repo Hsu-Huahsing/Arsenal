@@ -73,8 +73,8 @@ if __name__ == "__main__":
 
         for dict_df in dict_list:
             dict_df["file_name"] = file
-            dict_df["item"] = file_info["parentdir"]
-            dict_df["subitem"] = file.split("_")[0]
+            dict_df["item"] = file.split("_")[0]
+            # dict_df["subitem"] = file.split("_")[0]
             dict_df["data_cleaned"] = pd.DataFrame()
             frameup_safe(dict_df)
 

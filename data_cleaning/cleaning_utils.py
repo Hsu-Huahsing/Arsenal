@@ -6,7 +6,7 @@ from StevenTricks.convert_utils import changetype_stringtodate
 
 def dict_extract(dict_in, title="title", fields="fields", data="data", group="groups", date=None):
     out_dict = {}
-    out_dict["title"] = dict_in[title]
+    out_dict["subitem"] = colname_dic.get(dict_in[title].split(" ")[1],dict_in[title].split(" ")[1])
     out_dict["fields"] = dict_in[fields]
     out_dict["data"] = dict_in[data]
     out_dict["date"] = date

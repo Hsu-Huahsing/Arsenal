@@ -42,7 +42,7 @@ class CrawlerTask:
     def run_task(self, ind, col):
         # 依照日期與欄位名稱取得爬蟲設定
         crawlerdic = self.cfg.collection[col]
-        crawlerdic['payload']['date'] = ind.date().strftime("%Y%m%d")
+        crawlerdic['payload']['date'] = ind
 
         # 建立儲存目錄
         datapath = join(self.cfg.dbpath_source, col)
