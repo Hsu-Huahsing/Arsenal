@@ -48,6 +48,7 @@ if __name__ == "__main__":
         print("LOG讀取成功")
     else:
         log = periodictable(collection)
+        log.index = log.index.astype(str)
         print("LOG重置成功")
     # 不管有沒有log，在爬蟲啟動之前都會根據目前資料夾的資料來更新log，確保抓取沒有遺漏
     # 再判斷有沒有errorlog
