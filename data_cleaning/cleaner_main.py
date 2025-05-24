@@ -1,13 +1,10 @@
 import pandas as pd
-from cytoolz import remove
-
-from data_cleaning.fundic_mapping import fundic
-from data_cleaning.cleaning_utils import data_cleaned_pre, data_cleaned_df, data_cleaned_groups, frameup_safe,dict_extract
-from StevenTricks.convert_utils import findbylist,changetype_stringtodate
-from conf import collection,dbpath,dbpath_productlist,dbpath_log,dbpath_source,dbpath_cleaned,datecol
-from StevenTricks.file_utils import logfromfolder,  picklesave, pickleload, sweep_path, PathWalk_df
+from data_cleaning.cleaning_utils import data_cleaned_df, data_cleaned_groups, frameup_safe,dict_extract
+from StevenTricks.convert_utils import findbylist
+from StevenTricks.dbsqlite import tosql_df
+from conf import collection,dbpath_source,dbpath_cleaned
+from StevenTricks.file_utils import picklesave, pickleload, sweep_path, PathWalk_df
 from os.path import join
-from pathlib import Path
 
 def cleaner(product, title):
     """
@@ -59,50 +56,44 @@ if __name__ == "__main__":
         # 用抓table的方式，把固定的格式 title fields data groups(可有可無) date 抓出來 存成dict 在做後續的處理
 
         for dict_df in dict_list:
+            dict_df["file_name"] = file
+            dict_df["item"] = file_info["parentdir"]
+            dict_df["subitem"] = file.split("_")[0]
+            dict_df["data_cleaned"] = pd.DataFrame()
+            frameup_safe(dict_df)
 
+            if "groups" in dict_df:
+                dict_df = data_cleaned_groups(dict_df)
 
+            for key in dict_df["data_cleaned"]:
+                dict_df["data_cleaned"] = data_cleaned_df(dict_df["data_cleaned"],dict_df["item"],dict_df["subitem"],date=pd.to_datetime(dict_df["date"]))
 
-            file_data["file_name"] = file
-            file_data["item"] = file_info["parentdir"]
-            file_data["subitem"] = file.split("_")[0]
-            file_data["data_cleaned"] = {}
-            data_cleaned_pre(file_data)
-
-        frameup_safe(file_data)
-
-        if "creditList" in file_data:
-            file_data["data_cleaned"]["creditTitle"] = pd.DataFrame(file_data["creditList"], columns=file_data["creditFields"])
-
-        if "groups" in file_data:
-            file_data = data_cleaned_groups(file_data)
-
-        for key in file_data["data_cleaned"]:
-            file_data["data_cleaned"][key] = data_cleaned_df(file_data["data_cleaned"][key],file_data["item"],file_data["subitem"],date=pd.to_datetime(file_data["date"]))
-
-
-        break
-
-        test = pickleload(r"/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock/twse/source/發行量加權股價指數歷史資料/發行量加權股價指數歷史資料_2023-05-02.pkl")
-
-
-        test["data_cleaned"]={}
-        frameup_safe(test)
-        if "date" in test["data_cleaned"]["發行量加權股價指數歷史資料"]:
-            test["data_cleaned"]["發行量加權股價指數歷史資料"].index = pd.to_datetime(test["data_cleaned"]["發行量加權股價指數歷史資料"]["日期"])
-
-
-        test1= pickleload(
-            r"/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock/twse/source/發行量加權股價指數歷史資料/發行量加權股價指數歷史資料_2023-05-01.pkl")
-        if not test["data"]:print("ok")
-
-
-
-
-        data = productdict(file_data, getkeys(file_data))
-        clean_manager = cleaner(data, file.split("_")[0])
-        file_data.keys()
-        file_data["data"]
-        file_data["title"]
-        print(file,path)
+            tosql_df(df=dict_df["data_cleaned"], dbpath=join(dbpath_cleaned, dict_df["item"]), table=dict_df["subitem"], pk=[])
+            # 放進db，用最簡單的模式，直覺型放入，沒有用adapter
+        #
+        # break
+        #
+        # file_data = pickleload(r"/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock/twse/source/發行量加權股價指數歷史資料/發行量加權股價指數歷史資料_2023-05-02.pkl")
+        #
+        #
+        # test["data_cleaned"]={}
+        # frameup_safe(test)
+        # if "date" in test["data_cleaned"]["發行量加權股價指數歷史資料"]:
+        #     test["data_cleaned"]["發行量加權股價指數歷史資料"].index = pd.to_datetime(test["data_cleaned"]["發行量加權股價指數歷史資料"]["日期"])
+        #
+        #
+        # test1= pickleload(
+        #     r"/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock/twse/source/發行量加權股價指數歷史資料/發行量加權股價指數歷史資料_2023-05-01.pkl")
+        # if not test["data"]:print("ok")
+        #
+        #
+        #
+        #
+        # data = productdict(file_data, getkeys(file_data))
+        # clean_manager = cleaner(data, file.split("_")[0])
+        # file_data.keys()
+        # file_data["data"]
+        # file_data["title"]
+        # print(file,path)
 
 

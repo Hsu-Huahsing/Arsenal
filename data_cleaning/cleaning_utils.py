@@ -38,19 +38,9 @@ def frameup_safe(data_dict):
     col_diff = list(range(0, df.shape[1] - len(data_dict["fields"])))
     col = data_dict["fields"] + col_diff
     df.columns = col
-    data_dict["data_cleaned"][title] = df.drop(columns=col_diff)
+    data_dict["data_cleaned"] = df.drop(columns=col_diff)
     return data_dict
 
-
-def data_cleaned_pre(data_dict):
-    if "fields" in data_dict:
-        data_dict["fields"] = [colname_dic.get(_,_) for _ in data_dict["fields"]]
-    if "creditFields" in data_dict:
-        data_dict["creditFields"] = [colname_dic.get(_,_) for _ in data_dict["creditFields"]]
-    if "creditList" in data_dict:
-        for credit in data_dict["creditList"]:
-            data_dict["creditList"][credit] = [colname_dic.get(_,_) for _ in data_dict["creditList"][credit]]
-    return data_dict
 
 def data_cleaned_df(df, item, subitem, date):
     df = df.replace({",": "", r'\)': '', r'\(': '_'}, regex=True)
@@ -83,5 +73,5 @@ def data_cleaned_groups(data_dict):
         col = [data_dict["fields"][_] for _ in df_temp.columns]
         df_temp.columns = col
         df_dict[dict_temp["title"]] = df_temp
-    data_dict["data_cleaned"][title] = df_dict
+    data_dict["data_cleaned"] = df_dict
     return data_dict
