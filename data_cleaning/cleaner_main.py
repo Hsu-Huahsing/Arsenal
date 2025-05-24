@@ -41,6 +41,8 @@ if __name__ == "__main__":
         log = log.values.tolist()
         log = list(chain.from_iterable(log))
         dbpath_list = dbpath_list.loc[~dbpath_list["file"].isin(log),:]
+    else:
+        log = pd.DataFrame()
 
 
     for file , path in dbpath_list[["file","path"]].values:
@@ -83,6 +85,8 @@ if __name__ == "__main__":
 
             tosql_df(df=dict_df["data_cleaned"], dbpath=join(dbpath_cleaned, dict_df["item"] + ".db"), table=dict_df["subitem"], pk=[])
             # 放進db，用最簡單的模式，直覺型放入，沒有用adapter
+
+        log.loc[file_data["date"] , file.split("_")[0]] = file
         #
         # break
         #
