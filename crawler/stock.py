@@ -81,12 +81,12 @@ class CrawlerTask:
 
                 print(type(ind))
                 print(ind)
-                print(pd.to_datetime(ind))
+                # print(pd.to_datetime(ind))
             else:
                 self.cfg.log.loc[self.cfg.log.index == ind, col] = 'close'
                 print(type(ind))
                 print(ind)
-                print(pd.to_datetime(ind))
+                # print(pd.to_datetime(ind))
                 self.cfg.picklesave(self.cfg.log, self.cfg.dbpath_log)
                 return
         else:
