@@ -5,9 +5,9 @@ from StevenTricks.convert_utils import changetype_stringtodate
 from StevenTricks.dictur import keyinstr
 
 
-def dict_extract(dict_in, title="title", fields="fields", data="data", group="groups", date=None):
+def dict_extract(dict_in, title="title", subtitle = [] , fields="fields", data="data", group="groups", date=None):
     out_dict = {}
-    out_dict["subitem"] = keyinstr(dict_in[title], colname_dic, dict_in[title])
+    out_dict["subitem"] = keyinstr(str=dict_in[title], dic =colname_dic,lis=subtitle, default=dict_in[title])
     out_dict["fields"] = dict_in[fields]
     out_dict["data"] = dict_in[data]
     out_dict["date"] = pd.to_datetime(date)
@@ -51,9 +51,9 @@ def data_cleaned_df(df, item, subitem, date):
     date_col = [_ for _ in datecol if _ in df]
     if date_col:
         df = changetype_stringtodate(df, date_col, mode=3)
-        df = df.set_index(datecol, drop=True)
+        # df = df.set_index(datecol, drop=True)
     else :
-        df.index = [date]*df.shape[0]
+        df["date"] = [date]*df.shape[0]
     return df
 
 def data_cleaned_groups(data_dict):
