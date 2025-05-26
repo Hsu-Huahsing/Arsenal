@@ -54,6 +54,8 @@ if __name__ == "__main__":
         file_info = sweep_path(path)
         file_data = pickleload(path)
 
+
+        file = "每日收盤行情_2025-04-15"
         dict_list = []
 
         if "tables" in file_data:
@@ -82,7 +84,7 @@ if __name__ == "__main__":
                 dict_df = data_cleaned_groups(dict_df)
 
             dict_df["data_cleaned"] = data_cleaned_df(dict_df["data_cleaned"],dict_df["item"],dict_df["subitem"],date=pd.to_datetime(dict_df["date"]))
-
+            break
             tosql_df(df=dict_df["data_cleaned"], dbpath=join(dbpath_cleaned, dict_df["item"] + ".db"), table=dict_df["subitem"], pk=["代號"])
             # 放進db，用最簡單的模式，直覺型放入，沒有用adapter
 
@@ -91,7 +93,10 @@ if __name__ == "__main__":
         # break
         #
         # file_data = pickleload(r"/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock/twse/source/發行量加權股價指數歷史資料/發行量加權股價指數歷史資料_2023-05-02.pkl")
-        #
+        # file_data = pickleload(r"/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock/twse/source/每月當日沖銷交易標的及統計/每月當日沖銷交易標的及統計_2020-09-30.pkl")
+        file_data = pickleload(
+            r"/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock/twse/source/每日收盤行情/每日收盤行情_2025-04-15.pkl")
+
         #
         # test["data_cleaned"]={}
         # frameup_safe(test)

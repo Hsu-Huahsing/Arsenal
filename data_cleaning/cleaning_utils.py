@@ -2,14 +2,15 @@
 import pandas as pd
 from conf import colname_dic, dropcol, numericol, datecol
 from StevenTricks.convert_utils import changetype_stringtodate
+from StevenTricks.dictur import keyinstr
 
 
 def dict_extract(dict_in, title="title", fields="fields", data="data", group="groups", date=None):
     out_dict = {}
-    out_dict["subitem"] = colname_dic.get(dict_in[title].split(" ")[1],dict_in[title].split(" ")[1])
+    out_dict["subitem"] = keyinstr(dict_in[title], colname_dic, dict_in["item"])
     out_dict["fields"] = dict_in[fields]
     out_dict["data"] = dict_in[data]
-    out_dict["date"] = date
+    out_dict["date"] = pd.to_datetime(date)
     if "groups" in dict_in:
         out_dict["groups"] = dict_in[group]
     return out_dict
