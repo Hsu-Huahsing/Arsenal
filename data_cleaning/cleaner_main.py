@@ -38,9 +38,9 @@ if __name__ == "__main__":
     dbpath_list = PathWalk_df(dbpath_source, [], ["log"], [], [".pkl"])
     if log_info["exists"] is True:
         log = pickleload(dbpath_cleaned_log)
-        log = log.values.tolist()
-        log = list(chain.from_iterable(log))
-        dbpath_list = dbpath_list.loc[~dbpath_list["file"].isin(log),:]
+        log_list = log.values.tolist()
+        log_list = list(chain.from_iterable(log_list))
+        dbpath_list = dbpath_list.loc[~dbpath_list["file"].isin(log_list),:]
     else:
         log = pd.DataFrame()
 
@@ -53,21 +53,19 @@ if __name__ == "__main__":
             continue
         file_info = sweep_path(path)
         file_data = pickleload(path)
-
-
-        file = "每日收盤行情_2025-04-15"
+        subtitle = file_data["crawlerdic"].get("subtitle",[file_info["parentdir"]])
         dict_list = []
 
         if "tables" in file_data:
             for table in file_data["tables"]:
                 if table:
-                    dict_list.append(dict_extract(table,subtitle=file_data["crawlerdic"]["subtitle"],date=file_data["date"]))
+                    dict_list.append(dict_extract(table,subtitle=subtitle,date=file_data["date"]))
         else:
-            dict_list.append(dict_extract(file_data,subtitle=file_data["crawlerdic"]["subtitle"], date=file_data["date"]))
+            dict_list.append(dict_extract(file_data,subtitle=subtitle, date=file_data["date"]))
 
         if "creditTitle" in file_data :
             if file_data["creditTitle"] is not None:
-                dict_list.append(dict_extract(file_data, title="creditTitle",subtitle=file_data["crawlerdic"]["subtitle"], fields="creditFields", data="creditList",  date=file_data["date"]))
+                dict_list.append(dict_extract(file_data, title="creditTitle",subtitle=subtitle, fields="creditFields", data="creditList",  date=file_data["date"]))
 
         # 用抓table的方式，把固定的格式 title fields data groups(可有可無) date 抓出來 存成dict 在做後續的處理
 

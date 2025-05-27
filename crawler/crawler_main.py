@@ -58,7 +58,7 @@ if __name__ == "__main__":
         errorlog = pd.DataFrame()
     print("開始更新LOG")
     # 先盤點資料
-    dbpath_list = PathWalk_df(dbpath_source, [], ["log"], [], [])
+    dbpath_list = PathWalk_df(dbpath_source, [], ["log"], [".DS"], [])
     # 再更新log檔
     log = logfromfolder(dbpath_list, log=log, fillval='succeed')
     # 比對資料夾內的資料，依照現有存在的資料去比對比較準確，有可能上次抓完，中間有動到資料
