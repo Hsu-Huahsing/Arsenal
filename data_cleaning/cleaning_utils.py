@@ -1,19 +1,37 @@
 
 import pandas as pd
-from conf import colname_dic, dropcol, numericol, datecol
+from conf import colname_dic, dropcol, numericol, datecol, key_set
 from StevenTricks.convert_utils import changetype_stringtodate
 from StevenTricks.dictur import keyinstr
 
 
-def dict_extract(dict_in, title="title", subtitle = [] , fields="fields", data="data", group="groups", date=None):
-    out_dict = {}
-    out_dict["subitem"] = keyinstr(str=dict_in[title], dic =colname_dic,lis=subtitle, default=dict_in[title])
-    out_dict["fields"] = dict_in[fields]
-    out_dict["data"] = dict_in[data]
-    out_dict["date"] = pd.to_datetime(date)
-    if "groups" in dict_in:
-        out_dict["groups"] = dict_in[group]
-    return out_dict
+def key_extract(dic):
+    dict_df_list = []
+    for step,set_i in key_set.items():
+        dict_df = {}
+        if step in ["main"]:
+            while True:
+                cnt = 0
+                for key,item in set_i.items():
+                    for col in dic:
+                        if cnt == 0 and item in col:
+                            dict_df[key] = dic[col]
+                        elif cnt != 0 and item+str(cnt) in col:
+                            dict_df[key] = dic[col]
+                if dict_df :
+                    dict_df_list.append(dict_df)
+                    dict_df = {}
+                elif cnt >1 and not dict_df :
+                    break
+                cnt += 1
+        else:
+            for key, item in set_i.items():
+                for col in dic:
+                    if item in col:
+                        dict_df[key] = dic[col]
+            if dict_df:
+                dict_df_list.append(dict_df)
+    return dict_df_list
 
 
 def rename_columns_batch(df, replace_pairs):

@@ -103,6 +103,20 @@ headers = {
     'firefoxwin': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:70.0) Gecko/20100101 Firefox/70.0'
 }
 
+key_set = {
+    "main" : {
+        "fields":"fields",
+        "data":"data",
+        "title":"title",
+        "groups":"groups",
+    },
+    "set1" : {
+        "fields":"creditFields",
+        "data":"creditList",
+        "title":"creditTitle"
+    }
+}
+
 # 這裡給的col欄位都是要清理過後的
 numericol = {
     'stocklist': ['利率值'],
