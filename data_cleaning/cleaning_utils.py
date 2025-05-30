@@ -1,7 +1,7 @@
 
 import pandas as pd
 from conf import colname_dic, dropcol, numericol, datecol, key_set, fields_span
-from StevenTricks.convert_utils import changetype_stringtodate
+from StevenTricks.convert_utils import changetype_stringtodate,safe_replace
 from StevenTricks.dictur import keyinstr
 
 
@@ -71,6 +71,7 @@ def frameup_safe(data_dict):
     col_diff = list(range(0, df.shape[1] - len(data_dict["fields"])))
     col = data_dict["fields"] + col_diff
     col = [colname_dic.get(_,_) for _ in col]
+    col = [safe_replace(_,"</br>", "") for _ in col]
     df.columns = col
     data_dict["data_cleaned"] = df.drop(columns=col_diff)
     return data_dict
@@ -94,12 +95,13 @@ def data_cleaned_groups(data_dict):
     df_col = []
 
     for key in df_dict:
-        if key in ["融資","融券"]:
+        if key in ["融資","融券","借券賣出"]:
             df_col += [key+"_"+_ for _ in data_dict["fields"][df_dict[key]["start"]:df_dict[key]["end"]]]
         else:
             df_col += data_dict["fields"][df_dict[key]["start"]:df_dict[key]["end"]]
 
     df_col = [colname_dic.get(_, _) for _ in df_col]
+    df_col = [safe_replace(_,"</br>", "") for _ in df_col]
     df_main.columns = df_col
     data_dict["data_cleaned"] = df_main
     return data_dict

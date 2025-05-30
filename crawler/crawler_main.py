@@ -29,7 +29,7 @@ if __name__ == "__main__":
     if log_info["exists"] is True:
         log = pickleload(dbpath_log)
         # 有log還要判斷是不是最新的
-        if datetime.date.today() not in log.index:
+        if datetime.date.today().isoformat() not in log.index:
             print("{} not in log index, updating the log table".format(str(datetime.date.today())))
             # log.loc[log.index=="1999-07-25",:]
             # log.index = pd.to_datetime(log.index)
@@ -42,7 +42,7 @@ if __name__ == "__main__":
             # log.loc["ass"]
             # log["ddd"].unique()
             # type(log.index[2])
-            latest_log = periodictable(collection, datemin=log.index.max()+datetime.timedelta(days=1))
+            latest_log = periodictable(collection, datemin=pd.to_datetime(log.index.max())+datetime.timedelta(days=1))
             # 從上一次創建log的最新天數開始，所以要加一天，然後開始創建新的table
             log = pd.concat([log, latest_log])
         print("LOG讀取成功")
