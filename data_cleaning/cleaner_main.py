@@ -61,15 +61,18 @@ if __name__ == "__main__":
         # 用抓table的方式，把固定的格式 title fields data groups(可有可無) date 抓出來 存成dict 在做後續的處理
 
         for dict_df in dict_list:
+            # 先抓小分類，因為小分類攸關這個dict_df需不需要被執行
             dict_df["subitem"] = keyinstr(str=dict_df["title"], dic=colname_dic, lis=subtitle, default=dict_df["title"])
+
+            # subtitle如果被改過，原本要下載的，已經不用下載了，就要用下面subtitle_new抓最新的subtitle做更改
             subtitle_new = [colname_dic.get(_,_) for _ in collection[file_info["parentdir"]]["subtitle"] ]
             if dict_df["subitem"] not in subtitle_new:
                 continue
+
             
             dict_df["file_name"] = file
             dict_df["item"] = file.split("_")[0]
             dict_df["date"] = file_data["date"]
-            # dict_df["subitem"] = file.split("_")[0]
             dict_df["data_cleaned"] = pd.DataFrame()
             frameup_safe(dict_df)
 
