@@ -12,8 +12,8 @@ def key_extract(dic):
         print(step,set_i)
         if step in ["main"]:
             print("main")
+            cnt = 0
             while True:
-                cnt = 0
                 print(cnt)
                 for key,item in set_i.items():
                     print(key,item)
@@ -22,9 +22,11 @@ def key_extract(dic):
                         if cnt == 0 and item in col:
                             print(item)
                             dict_df[key] = dic[col]
+                            break
                         elif cnt != 0 and item+str(cnt) in col:
                             print(item+str(cnt))
                             dict_df[key] = dic[col]
+                            break
                 print(dict_df)
                 if dict_df :
                     print(dict_df)
