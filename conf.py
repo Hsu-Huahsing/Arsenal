@@ -105,21 +105,15 @@ headers = {
 
 key_set = {
     "main1" : {
-        "fields":"fields",
-        "data":"data",
-        "title":"title",
-        "groups":"groups",
-    },
-    "main2" : {
-        "fields":"fields",
-        "data":"data",
-        "subtitle":"subtitle",
-        "groups":"groups",
+        "fields":["fields"],
+        "data":["data"],
+        "title":["title","subtitle"],
+        "groups":["groups"],
     },
     "set1" : {
-        "fields":"creditFields",
-        "data":"creditList",
-        "title":"creditTitle"
+        "fields":["creditFields"],
+        "data":["creditList"],
+        "title":["creditTitle"]
     }
 }
 
