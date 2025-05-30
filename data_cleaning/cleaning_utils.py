@@ -1,6 +1,6 @@
 
 import pandas as pd
-from conf import colname_dic, dropcol, numericol, datecol, key_set
+from conf import colname_dic, dropcol, numericol, datecol, key_set, fields_span
 from StevenTricks.convert_utils import changetype_stringtodate
 from StevenTricks.dictur import keyinstr
 
@@ -90,21 +90,16 @@ def data_cleaned_df(df, item, subitem, date):
     return df
 
 def data_cleaned_groups(data_dict):
-    df_dict = {}
+    df_dict = fields_span[data_dict["subitem"]]
     df_main = pd.DataFrame(data_dict["data"])
     df_col = []
-    cnts = 0
-    for dict_temp in data_dict["groups"]:
-        cnts += 1
-        if not df_col:
-            df_col = list(range(0, dict_temp["start"]))
-        if cnts == len(data_dict["groups"]):
-            df_temp = pd.DataFrame(df_main.iloc[:, df_col + list(range(dict_temp["start"], len(data_dict["fields"])))])
+
+    for key in df_dict:
+        if key in ["融資","融券"]:
+            df_col += [key+_ for _ in data_dict["fields"][df_dict[key]["start"]:df_dict[key]["end"]]]
         else:
-            df_temp = pd.DataFrame(
-                df_main.iloc[:, df_col + list(range(dict_temp["start"], dict_temp["start"] + dict_temp["span"]))])
-        col = [data_dict["fields"][_] for _ in df_temp.columns]
-        df_temp.columns = col
-        df_dict[dict_temp["title"]] = df_temp
-    data_dict["data_cleaned"] = df_dict
+            df_col += data_dict["fields"][df_dict[key]["start"]:df_dict[key]["end"]]
+
+    df_main.columns = df_col
+    data_dict["data_cleaned"] = df_main
     return data_dict

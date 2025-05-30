@@ -1,36 +1,11 @@
 import pandas as pd
-from data_cleaning.cleaning_utils import data_cleaned_df, data_cleaned_groups, frameup_safe,key_extract,key_extract
-from StevenTricks.convert_utils import findbylist
+from data_cleaning.cleaning_utils import data_cleaned_df, data_cleaned_groups, frameup_safe,key_extract
 from StevenTricks.dbsqlite import tosql_df
-from conf import collection,dbpath_source,dbpath_cleaned,dbpath_cleaned_log,colname_dic
+from conf import collection,dbpath_source,dbpath_cleaned,dbpath_cleaned_log,colname_dic,fields_span
 from StevenTricks.file_utils import picklesave, pickleload, sweep_path, PathWalk_df
 from StevenTricks.dictur import keyinstr
 from os.path import join
 from itertools import chain
-
-
-def cleaner(product, title):
-    """
-    根據 title 取出每個 subtitle 對應的清洗函式，處理 product 資料
-    """
-    result = {}
-    for key, df in product.items():
-        mapped = findbylist(collection[title]['subtitle'], key)
-        if not mapped:
-            print(f"[Warning] {key} is not in collection[{title}]['subtitle']")
-            continue
-        if len(mapped) > 1:
-            print(f"[Warning] {key} maps to multiple subtitles: {mapped}")
-            continue
-        subtitle = mapped[0]
-        try:
-            func = fundic[title][subtitle]
-            cleaned = func(df, title, subtitle)
-            result.update(cleaned)
-        except Exception as e:
-            print(f"[Error] Failed cleaning {title} - {subtitle} with error: {e}")
-            continue
-    return result
 
 
 log_info = sweep_path(dbpath_cleaned_log)
@@ -65,6 +40,9 @@ if __name__ == "__main__":
         # 用抓table的方式，把固定的格式 title fields data groups(可有可無) date 抓出來 存成dict 在做後續的處理
 
         for dict_df in dict_list:
+            if "data" not in dict_df and "title" not in dict_df and "fields" not in dict_df:
+                continue
+
             # 先抓小分類，因為小分類攸關這個dict_df需不需要被執行
             dict_df["subitem"] = keyinstr(str=dict_df["title"], dic=colname_dic, lis=subtitle, default=dict_df["title"])
 
@@ -72,16 +50,19 @@ if __name__ == "__main__":
             subtitle_new = [colname_dic.get(_,_) for _ in collection[file_info["parentdir"]]["subtitle"] ]
             if dict_df["subitem"] not in subtitle_new:
                 continue
+            if not dict_df["data"] and dict_df["title"] != "" and dict_df["fields"]:
+                continue
 
-            
+
             dict_df["file_name"] = file
             dict_df["item"] = file.split("_")[0]
-            dict_df["date"] = file_data["date"]
+            dict_df["date"] = file_data["crawlerdic"]["payload"]["date"]
+            # 用file_data的date會有錯20090113會變成00180113所以最安全是用crawlerdic裡面的
             dict_df["data_cleaned"] = pd.DataFrame()
             frameup_safe(dict_df)
 
-            if "groups" in dict_df:
-                dict_df = data_cleaned_groups(dict_df)
+            if dict_df["subitem"] in fields_span:
+                data_cleaned_groups(dict_df)
 
             dict_df["data_cleaned"] = data_cleaned_df(dict_df["data_cleaned"],dict_df["item"],dict_df["subitem"],date=pd.to_datetime(dict_df["date"]))
             # break
@@ -96,7 +77,7 @@ if __name__ == "__main__":
         # file_data = pickleload(r"/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock/twse/source/發行量加權股價指數歷史資料/發行量加權股價指數歷史資料_2023-05-02.pkl")
         # file_data = pickleload(r"/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock/twse/source/每月當日沖銷交易標的及統計/每月當日沖銷交易標的及統計_2020-09-30.pkl")
         # file_data = pickleload(r"/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock/twse/source/每日收盤行情/每日收盤行情_2025-04-15.pkl")
-
+        # file_data = pickleload(r"/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock/twse/source/信用交易統計/信用交易統計_2023-04-14.pkl")
         #
         # test["data_cleaned"]={}
         # frameup_safe(test)
