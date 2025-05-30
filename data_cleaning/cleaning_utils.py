@@ -9,24 +9,37 @@ def key_extract(dic):
     dict_df_list = []
     for step,set_i in key_set.items():
         dict_df = {}
+        print(step,set_i)
         if step in ["main"]:
+            print("main")
             while True:
                 cnt = 0
+                print(cnt)
                 for key,item in set_i.items():
+                    print(key,item)
                     for col in dic:
+                        print(col)
                         if cnt == 0 and item in col:
+                            print(item)
                             dict_df[key] = dic[col]
                         elif cnt != 0 and item+str(cnt) in col:
+                            print(item+str(cnt))
                             dict_df[key] = dic[col]
+                print(dict_df)
                 if dict_df :
+                    print(dict_df)
                     dict_df_list.append(dict_df)
                     dict_df = {}
                 elif cnt >1 and not dict_df :
+                    print(cnt,dict_df)
                     break
                 cnt += 1
         else:
+            print(step)
             for key, item in set_i.items():
+                print(key,item)
                 for col in dic:
+                    print(col)
                     if item in col:
                         dict_df[key] = dic[col]
             if dict_df:

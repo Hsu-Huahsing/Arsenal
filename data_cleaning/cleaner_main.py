@@ -57,7 +57,11 @@ if __name__ == "__main__":
         subtitle = file_data["crawlerdic"].get("subtitle",[file_info["parentdir"]])
 
         dict_list = key_extract(dic=file_data)
-
+        dict_list_tables = []
+        if "tables" in file_data:
+            for table in file_data["tables"]:
+                dict_list_tables += key_extract(dic=table)
+        dict_list += dict_list_tables
         # 用抓table的方式，把固定的格式 title fields data groups(可有可無) date 抓出來 存成dict 在做後續的處理
 
         for dict_df in dict_list:
