@@ -19,11 +19,11 @@ def key_extract(dic):
                     print(key,item)
                     for col in dic:
                         print(col)
-                        if cnt == 0 and item in col:
+                        if cnt == 0 and item == col:
                             print(item)
                             dict_df[key] = dic[col]
                             break
-                        elif cnt != 0 and item+str(cnt) in col:
+                        elif cnt != 0 and item+str(cnt) == col:
                             print(item+str(cnt))
                             dict_df[key] = dic[col]
                             break
@@ -42,7 +42,7 @@ def key_extract(dic):
                 print(key,item)
                 for col in dic:
                     print(col)
-                    if item in col:
+                    if item == col:
                         dict_df[key] = dic[col]
             if dict_df:
                 dict_df_list.append(dict_df)
