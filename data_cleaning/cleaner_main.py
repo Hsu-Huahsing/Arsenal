@@ -42,6 +42,10 @@ if __name__ == "__main__":
         for dict_df in dict_list:
             if "data" not in dict_df and "title" not in dict_df and "fields" not in dict_df:
                 continue
+            elif not dict_df["data"] and dict_df["title"] != "" and dict_df["fields"]:
+                continue
+            elif not dict_df["data"] and dict_df["title"] is None and not dict_df["fields"]:
+                continue
 
             # 先抓小分類，因為小分類攸關這個dict_df需不需要被執行
             dict_df["subitem"] = keyinstr(str=dict_df["title"], dic=colname_dic, lis=subtitle, default=dict_df["title"])
@@ -50,11 +54,6 @@ if __name__ == "__main__":
             subtitle_new = [colname_dic.get(_,_) for _ in collection[file_info["parentdir"]]["subtitle"] ]
             if dict_df["subitem"] not in subtitle_new:
                 continue
-            if not dict_df["data"] and dict_df["title"] != "" and dict_df["fields"]:
-                continue
-            elif not dict_df["data"] and dict_df["title"] is None and not dict_df["fields"]:
-                continue
-
 
             dict_df["file_name"] = file
             dict_df["item"] = file.split("_")[0]
