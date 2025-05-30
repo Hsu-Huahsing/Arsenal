@@ -68,7 +68,11 @@ if __name__ == "__main__":
 
             dict_df["data_cleaned"] = data_cleaned_df(dict_df["data_cleaned"],dict_df["item"],dict_df["subitem"],date=pd.to_datetime(dict_df["date"]))
             # break
-            tosql_df(df=dict_df["data_cleaned"], dbpath=join(dbpath_cleaned, dict_df["item"] + ".db"), table=dict_df["subitem"], pk=["代號"])
+            if "代號" not in dict_df["data_cleaned"]:
+                tosql_df(df=dict_df["data_cleaned"], dbpath=join(dbpath_cleaned, dict_df["item"] + ".db"), table=dict_df["subitem"], pk=["代號","date"])
+            else:
+                tosql_df(df=dict_df["data_cleaned"], dbpath=join(dbpath_cleaned, dict_df["item"] + ".db"),
+                         table=dict_df["subitem"], pk=[])
             # 放進db，用最簡單的模式，直覺型放入，沒有用adapter
 
         log.loc[file_data["date"] , file.split("_")[0]] = file

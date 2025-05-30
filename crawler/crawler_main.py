@@ -88,6 +88,7 @@ if __name__ == "__main__":
         product_old = pickleload(dbpath_productlist)
         product_manager = DataFrameMerger(product_old)
         product_old = product_manager.renew(product)
+        picklesave(product_old, dbpath_productlist)
 
     main(
         collection=collection,
