@@ -104,10 +104,16 @@ headers = {
 }
 
 key_set = {
-    "main" : {
+    "main1" : {
         "fields":"fields",
         "data":"data",
         "title":"title",
+        "groups":"groups",
+    },
+    "main2" : {
+        "fields":"fields",
+        "data":"data",
+        "subtitle":"subtitle",
         "groups":"groups",
     },
     "set1" : {

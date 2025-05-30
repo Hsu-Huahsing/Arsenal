@@ -10,7 +10,7 @@ def key_extract(dic):
     for step,set_i in key_set.items():
         dict_df = {}
         print(step,set_i)
-        if step in ["main"]:
+        if step in ["main1","main2"]:
             print("main")
             cnt = 0
             while True:
