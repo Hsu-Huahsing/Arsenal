@@ -98,7 +98,7 @@ class CrawlerTask:
         # 組裝資料儲存
         data['crawlerdic'] = crawlerdic
         data['request'] = res
-        filename = join(datapath, f"{col}_{ind.date()}.pkl")
+        filename = join(datapath, f"{col}_{ind}.pkl")
         self.cfg.picklesave(data, filename)
 
         # 若資料頻率是月頻，清除當月舊檔案
