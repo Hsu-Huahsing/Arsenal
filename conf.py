@@ -109,11 +109,13 @@ key_set = {
         "data":["data"],
         "title":["title","subtitle"],
         "groups":["groups"],
+        "notes":["notes"],
     },
     "set1" : {
         "fields":["creditFields"],
         "data":["creditList"],
-        "title":["creditTitle"]
+        "title":["creditTitle"],
+        "notes":["creditNotes"],
     }
 }
 

@@ -9,39 +9,39 @@ def key_extract(dic):
     dict_df_list = []
     for step,set_i in key_set.items():
         dict_df = {}
-        print(step,set_i)
+        # print(step,set_i)
         if step in ["main1"]:
-            print("main")
+            # print("main")
             cnt = 0
             while True:
-                print(cnt)
+                # print(cnt)
                 for key,item_list in set_i.items():
-                    print(key,item_list)
+                    # print(key,item_list)
                     for col in dic:
-                        print(col)
+                        # print(col)
                         if cnt == 0 and col in item_list :
-                            print(col)
+                            # print(col)
                             dict_df[key] = dic[col]
                             break
                         elif cnt != 0 and col in [_+str(cnt) for _ in item_list]:
-                            print(col)
+                            # print(col)
                             dict_df[key] = dic[col]
                             break
-                print(dict_df)
+                # print(dict_df)
                 if dict_df :
-                    print(dict_df)
+                    # print(dict_df)
                     dict_df_list.append(dict_df)
                     dict_df = {}
                 elif cnt >1 and not dict_df :
-                    print(cnt,dict_df)
+                    # print(cnt,dict_df)
                     break
                 cnt += 1
         else:
-            print(step)
+            # print(step)
             for key, item_list in set_i.items():
-                print(key,item_list)
+                # print(key,item_list)
                 for col in dic:
-                    print(col)
+                    # print(col)
                     if col in item_list:
                         dict_df[key] = dic[col]
             if dict_df:
@@ -84,7 +84,6 @@ def data_cleaned_df(df, item, subitem, date):
     date_col = [_ for _ in datecol if _ in df]
     if date_col:
         df = changetype_stringtodate(df, date_col, mode=3)
-        # df = df.set_index(datecol, drop=True)
     else :
         df["date"] = [date]*df.shape[0]
     return df
@@ -96,10 +95,11 @@ def data_cleaned_groups(data_dict):
 
     for key in df_dict:
         if key in ["融資","融券"]:
-            df_col += [key+_ for _ in data_dict["fields"][df_dict[key]["start"]:df_dict[key]["end"]]]
+            df_col += [key+"_"+_ for _ in data_dict["fields"][df_dict[key]["start"]:df_dict[key]["end"]]]
         else:
             df_col += data_dict["fields"][df_dict[key]["start"]:df_dict[key]["end"]]
 
+    df_col = [colname_dic.get(_, _) for _ in df_col]
     df_main.columns = df_col
     data_dict["data_cleaned"] = df_main
     return data_dict

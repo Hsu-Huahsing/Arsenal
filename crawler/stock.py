@@ -76,7 +76,8 @@ class CrawlerTask:
         # 伺服器回應正常（200 OK）
         if res.status_code == self.cfg.request_module.codes.ok:
             # stat網頁回應是ok，還有回應確實有拿到資料，data不能是空的，這樣才是正確的回應，如果只是連線ok但資料是空的，就代表那天放假
-            if data.get('stat') == 'OK' and data.get('data'):
+            # 但是data的key有可能叫做data1、data2所以不能直接用data去判斷，會因為key的名稱產生誤判
+            if data.get('stat') == 'OK':
                 self.cfg.log.loc[self.cfg.log.index == ind, col] = 'succeed'
 
                 print(type(ind))

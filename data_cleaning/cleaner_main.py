@@ -52,6 +52,8 @@ if __name__ == "__main__":
                 continue
             if not dict_df["data"] and dict_df["title"] != "" and dict_df["fields"]:
                 continue
+            elif not dict_df["data"] and dict_df["title"] is None and not dict_df["fields"]:
+                continue
 
 
             dict_df["file_name"] = file
@@ -59,10 +61,11 @@ if __name__ == "__main__":
             dict_df["date"] = file_data["crawlerdic"]["payload"]["date"]
             # 用file_data的date會有錯20090113會變成00180113所以最安全是用crawlerdic裡面的
             dict_df["data_cleaned"] = pd.DataFrame()
-            frameup_safe(dict_df)
 
             if dict_df["subitem"] in fields_span:
                 data_cleaned_groups(dict_df)
+            else:
+                frameup_safe(dict_df)
 
             dict_df["data_cleaned"] = data_cleaned_df(dict_df["data_cleaned"],dict_df["item"],dict_df["subitem"],date=pd.to_datetime(dict_df["date"]))
             # break
