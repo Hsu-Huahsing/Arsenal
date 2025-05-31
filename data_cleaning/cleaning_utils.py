@@ -1,4 +1,3 @@
-
 import pandas as pd
 from conf import colname_dic, dropcol, numericol, datecol, key_set, fields_span
 from StevenTricks.convert_utils import changetype_stringtodate,safe_replace
@@ -54,13 +53,6 @@ def rename_columns_batch(df, replace_pairs):
     for old, new in replace_pairs:
         colstr = colstr.replace(old, new, 1)
     df.columns = colstr.split(",")
-    return df
-
-
-def safe_numeric_convert(df, cols):
-    """將指定欄位轉成數值型態，無法轉換設為 NaN"""
-    cols = [_ for _ in cols if _ in df]
-    df[cols] = df[cols].apply(pd.to_numeric, errors='coerce')
     return df
 
 
