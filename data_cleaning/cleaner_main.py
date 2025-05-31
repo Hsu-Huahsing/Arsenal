@@ -16,6 +16,7 @@ if __name__ == "__main__":
         log = pickleload(dbpath_cleaned_log)
         log_list = log.values.tolist()
         log_list = list(chain.from_iterable(log_list))
+        # set(log_list)
         dbpath_list = dbpath_list.loc[~dbpath_list["file"].isin(log_list),:]
     else:
         log = pd.DataFrame()
@@ -75,8 +76,9 @@ if __name__ == "__main__":
                          table=dict_df["subitem"], pk=[])
             # 放進db，用最簡單的模式，直覺型放入，沒有用adapter
 
-        log.loc[file_data["date"] , file.split("_")[0]] = file
+        log.loc[file_data["crawlerdic"]["payload"]["date"] , file.split("_")[0]] = file
         picklesave(log, dbpath_cleaned_log)
+        print("OK")
         #
         # break
         #

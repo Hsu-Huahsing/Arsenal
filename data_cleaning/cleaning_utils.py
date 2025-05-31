@@ -2,7 +2,6 @@
 import pandas as pd
 from conf import colname_dic, dropcol, numericol, datecol, key_set, fields_span
 from StevenTricks.convert_utils import changetype_stringtodate,safe_replace
-from StevenTricks.dictur import keyinstr
 
 
 def key_extract(dic):
