@@ -42,7 +42,7 @@ if __name__ == "__main__":
             # log.loc["ass"]
             # log["ddd"].unique()
             # type(log.index[2])
-            latest_log = periodictable(collection, datemin=pd.to_datetime(log.index.max())+datetime.timedelta(days=1))
+            latest_log = periodictable(collection, datemin=max(pd.to_datetime(log.index))+datetime.timedelta(days=1))
             # 從上一次創建log的最新天數開始，所以要加一天，然後開始創建新的table
             log = pd.concat([log, latest_log])
         print("LOG讀取成功")

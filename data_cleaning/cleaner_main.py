@@ -1,7 +1,7 @@
 import pandas as pd
 from data_cleaning.cleaning_utils import data_cleaned_df, data_cleaned_groups, frameup_safe,key_extract
 from StevenTricks.dbsqlite import tosql_df
-from conf import collection,dbpath_source,dbpath_cleaned,dbpath_cleaned_log,colname_dic,fields_span
+from conf import collection,dbpath_source,dbpath_cleaned,dbpath_cleaned_log,colname_dic,fields_span,transtonew_col
 from StevenTricks.file_utils import picklesave, pickleload, sweep_path, PathWalk_df
 from StevenTricks.dictur import keyinstr
 from os.path import join
@@ -21,6 +21,7 @@ if __name__ == "__main__":
     else:
         log = pd.DataFrame()
 
+    # dbpath_list = dbpath_list.loc[dbpath_list["file"].str.contains("發行量加權股價指數歷史資料"),:]
 
     for file , path in dbpath_list[["file","path"]].values:
         print(file,path)
@@ -68,7 +69,8 @@ if __name__ == "__main__":
                 frameup_safe(dict_df)
 
             dict_df["data_cleaned"] = data_cleaned_df(dict_df["data_cleaned"],dict_df["item"],dict_df["subitem"],date=pd.to_datetime(dict_df["date"]))
-            # break
+
+
             if "代號" not in dict_df["data_cleaned"]:
                 tosql_df(df=dict_df["data_cleaned"], dbpath=join(dbpath_cleaned, dict_df["item"] + ".db"), table=dict_df["subitem"], pk=["代號","date"])
             else:
@@ -79,7 +81,7 @@ if __name__ == "__main__":
         log.loc[file_data["crawlerdic"]["payload"]["date"] , file.split("_")[0]] = file
         picklesave(log, dbpath_cleaned_log)
         print("OK")
-        #
+
         # break
         #
         # file_data = pickleload(r"/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock/twse/source/發行量加權股價指數歷史資料/發行量加權股價指數歷史資料_2023-05-02.pkl")

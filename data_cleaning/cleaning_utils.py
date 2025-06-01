@@ -1,6 +1,6 @@
 import pandas as pd
-from conf import colname_dic, dropcol, numericol, datecol, key_set, fields_span
-from StevenTricks.convert_utils import changetype_stringtodate,safe_replace
+from conf import colname_dic, dropcol, numericol, datecol, key_set, fields_span,transtonew_col
+from StevenTricks.convert_utils import changetype_stringtodate,safe_replace,safe_numeric_convert
 
 
 def key_extract(dic):
@@ -71,8 +71,16 @@ def frameup_safe(data_dict):
 def data_cleaned_df(df, item, subitem, date):
     df = df.replace({",": "", r'\)': '', r'\(': '_'}, regex=True)
     df = df.drop(columns=dropcol, errors='ignore')
+    # 把舊制的欄位名稱轉換成新制,要確定有這個類別才行，不然會報錯
+    if item in transtonew_col:
+        if subitem in transtonew_col[item]:
+            new_col = transtonew_col[item][subitem]
+            df_col = [new_col.get(_,_) for _ in df]
+            df.columns = df_col
+    # 特定欄位名稱轉換成數值
     cols = numericol[item][subitem]
     df = safe_numeric_convert(df, cols)
+    # 特定欄位名稱轉換成日期
     date_col = [_ for _ in datecol if _ in df]
     if date_col:
         df = changetype_stringtodate(df, date_col, mode=3)
