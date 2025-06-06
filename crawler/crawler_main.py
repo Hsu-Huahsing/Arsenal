@@ -42,13 +42,13 @@ if __name__ == "__main__":
             # log.loc["ass"]
             # log["ddd"].unique()
             # type(log.index[2])
-            latest_log = periodictable(collection, datemin=max(pd.to_datetime(log.index))+datetime.timedelta(days=1))
+            latest_log = periodictable(collection, datemin=max(pd.to_datetime(log.index, errors='coerce'))+datetime.timedelta(days=1))
             # 從上一次創建log的最新天數開始，所以要加一天，然後開始創建新的table
             log = pd.concat([log, latest_log])
         print("LOG讀取成功")
     else:
         log = periodictable(collection)
-        log.index = log.index.astype(str)
+        log.index = log.index.strftime("%Y-%m-%d")
         print("LOG重置成功")
     # 不管有沒有log，在爬蟲啟動之前都會根據目前資料夾的資料來更新log，確保抓取沒有遺漏
     # 再判斷有沒有errorlog
