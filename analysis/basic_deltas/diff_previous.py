@@ -1,6 +1,7 @@
 from conf import dbpath_cleaned,numericol
 from StevenTricks.dbsqlite import readsql_iter
 from StevenTricks.convert_utils import safe_numeric_convert
+from StevenTricks.dfi import make_series
 import pandas as pd
 
 
@@ -24,23 +25,6 @@ def diff_previous(df: pd.DataFrame, sort_col : ["代號","date"], item: str,subi
             temp[f'diff_percent_{col}'] = temp[f'diff_{col}'] / temp[f'previous_{col}']
 
     return temp
-
-
-def extract_timeseries_column(df, column_name, date_name="date"):
-    """
-    從 DataFrame 中抽出特定欄位，並將 date 作為 index 欄位合併輸出。
-
-    Parameters:
-        df (pd.DataFrame): 原始資料。
-        column_name (str): 欲抽取的欄位名稱。
-        date_name (str): 欲命名的日期欄位（預設為 'date'）。
-
-    Returns:
-        pd.DataFrame: 包含 date 與欄位值的新資料框。
-    """
-    result = df[column_name].copy()
-    result.index = df[date_name]
-    return result
 
 def cumulative_tracker(
         series,
@@ -102,6 +86,6 @@ if __name__ == "__main__":
     table1 = readsql_iter(dbpath=dbpath_cleaned,db_list=["外資及陸資投資持股統計.db"])
     table1 = next(table1)
     table2 = diff_previous(table1, ["代號", "date"], item="外資及陸資投資持股統計", subitem="外資及陸資投資持股統計")
-    date_col = extract_timeseries_column(table2, "diff_全體外資及陸資持有股數")
+    date_col = make_series(table2, "diff_全體外資及陸資持有股數")
     cumulative_tracker(date_col,"2023-1-1",)
 
