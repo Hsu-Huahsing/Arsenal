@@ -3,7 +3,7 @@ from data_cleaning.cleaning_utils import data_cleaned_df, data_cleaned_groups, f
 from StevenTricks.dbsqlite import tosql_df
 from conf import collection,dbpath_source,dbpath_cleaned,dbpath_cleaned_log,colname_dic,fields_span,transtonew_col
 from StevenTricks.file_utils import picklesave, pickleload, sweep_path, PathWalk_df
-from StevenTricks.dictur import keyinstr
+from StevenTricks.dict_utils import keyinstr
 from os.path import join
 from itertools import chain
 

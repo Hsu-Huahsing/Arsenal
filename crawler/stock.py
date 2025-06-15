@@ -8,10 +8,10 @@ from traceback import format_exc
 import requests
 
 # 匯入你自己的工具套件（StevenTricks）
-from StevenTricks.dfi import findval                 # 找出 log 中需要處理的資料
-from StevenTricks.netGEN import randomheader         # 隨機 HTTP 請求 header（模擬瀏覽器）
+from StevenTricks.df_utils import findval                 # 找出 log 中需要處理的資料
+from StevenTricks.net_utils import randomheader         # 隨機 HTTP 請求 header（模擬瀏覽器）
 from StevenTricks.file_utils import picklesave       # 儲存 .pkl 檔案工具
-from StevenTricks.process import sleepteller         # 控制 sleep 時間，避免觸發反爬蟲
+from StevenTricks.control_flow import sleepteller         # 控制 sleep 時間，避免觸發反爬蟲
 
 # === 配置類別 ===
 class CrawlerConfig:

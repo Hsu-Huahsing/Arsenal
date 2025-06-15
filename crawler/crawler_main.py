@@ -6,9 +6,9 @@ Created on Fri May 22 23:22:32 2020
 @author: mac
 """
 
-from StevenTricks.dfi import periodictable, DataFrameMerger
+from StevenTricks.df_utils import periodictable, DataFrameMerger
 from StevenTricks.file_utils import logfromfolder,  picklesave, pickleload, sweep_path, PathWalk_df
-from StevenTricks.process import sleepteller
+from StevenTricks.control_flow import sleepteller
 from conf import collection, dailycollection, colname_dic, product_clean,dbpath,dbpath_source,dbpath_log,dbpath_errorlog,dbpath_productlist
 from schema_utils import warehouseinit
 from crawler.product_list import product_list
