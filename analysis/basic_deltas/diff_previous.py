@@ -81,6 +81,57 @@ def cumulative_tracker(
     else:
         return None, 0, 'exhausted'
 
+class CumulativeMatcher:
+    def __init__(self, series):
+        self.series = series.sort_index()
+        self.reference_start = None
+        self.reference_end = None
+        self.reference_sum = None
+
+    def set_reference(self, start_date, end_date):
+        """
+        設定參考區間，透過 cumulative_tracker 累積 reference sum。
+        """
+        start = pd.to_datetime(start_date)
+        end = pd.to_datetime(end_date)
+        date, cum_sum, _ = cumulative_tracker(
+            start_date=start,
+            end_date=end,
+            direction="forward"
+        )
+        self.reference_start = start
+        self.reference_end = end
+        self.reference_sum = cum_sum
+
+    def find_matching_period(self, start_date=None, direction="forward", threshold=None, end_date=None):
+        """
+        根據參考值或指定門檻，在給定起點後尋找相同累積值的區段。
+
+        Parameters:
+            start_date (str or datetime): 搜尋起始點（預設為 reference_end）
+            direction (str): "forward" 或 "backward"
+            threshold (float or None): 要匹配的累積門檻，預設為 reference_sum
+            end_date (str or datetime or None): 限制搜尋的最遠時間
+
+        Returns:
+            tuple: (pd.Timestamp, 累積值, 終止原因)
+        """
+        if threshold is None:
+            if self.reference_sum is None:
+                raise ValueError("No reference threshold defined.")
+            threshold = self.reference_sum
+
+        if start_date is None:
+            if self.reference_end is None:
+                raise ValueError("Must provide start_date or set reference first.")
+            start_date = self.reference_end
+
+        return cumulative_tracker(
+            start_date=start_date,
+            threshold=threshold,
+            end_date=end_date,
+            direction=direction
+        )
 
 if __name__ == "__main__":
     table1 = readsql_iter(dbpath=dbpath_cleaned,db_list=["外資及陸資投資持股統計.db"])
