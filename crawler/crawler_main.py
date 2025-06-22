@@ -62,6 +62,9 @@ if __name__ == "__main__":
     # 再更新log檔
     log = logfromfolder(dbpath_list, log=log, fillval='succeed')
     # 比對資料夾內的資料，依照現有存在的資料去比對比較準確，有可能上次抓完，中間有動到資料
+
+    # a=sorted(log.index)
+
     print("Log檔案更新結束\nLog程序處理結束")
     # log處理結束
     print("開始進行網路資料下載")
