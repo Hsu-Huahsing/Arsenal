@@ -1,7 +1,8 @@
 import pandas as pd
 from data_cleaning.cleaning_utils import data_cleaned_df, data_cleaned_groups, frameup_safe,key_extract
 from StevenTricks.dbsqlite import tosql_df
-from conf import collection,dbpath_source,dbpath_cleaned,dbpath_cleaned_log,colname_dic,fields_span,transtonew_col
+from config.conf import collection,colname_dic,fields_span
+from config.paths import dbpath_source,dbpath_cleaned,dbpath_cleaned_log
 from StevenTricks.file_utils import picklesave, pickleload, sweep_path, PathWalk_df
 from StevenTricks.dict_utils import keyinstr
 from os.path import join
