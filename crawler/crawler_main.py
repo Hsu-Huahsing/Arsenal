@@ -9,7 +9,8 @@ Created on Fri May 22 23:22:32 2020
 from StevenTricks.df_utils import periodictable, DataFrameMerger
 from StevenTricks.file_utils import logfromfolder,  picklesave, pickleload, sweep_path, PathWalk_df
 from StevenTricks.control_flow import sleepteller
-from config.conf import collection, dailycollection, colname_dic, product_clean
+from config.conf import collection, dailycollection, product_clean
+from config.col_rename import colname_dic
 from config.paths import dbpath,dbpath_source,dbpath_log,dbpath_errorlog,dbpath_productlist
 from schema_utils import warehouseinit
 from crawler.product_list import product_list

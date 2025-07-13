@@ -1,5 +1,7 @@
 import pandas as pd
-from config.conf import colname_dic, dropcol, numericol, datecol, key_set, fields_span,transtonew_col
+from config.conf import dropcol, key_set, fields_span
+from config.col_rename import colname_dic,transtonew_col
+from config.col_format import numericol, datecol
 from StevenTricks.convert_utils import changetype_stringtodate,safe_replace,safe_numeric_convert
 
 
