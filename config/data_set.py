@@ -10,7 +10,7 @@ data_list = ["個別產業成交比重","產業及三大法人","產業及融資
 
 
 
-def update_cachename_log(data_list, cache_dir, namelog_path, code_length=4, avoid_mode="fuzzy"):
+def update_cache(data_list, cache_dir, namelog_path, code_length=4, avoid_mode="fuzzy"):
     """
     根據 data_list 和現有的 cachename_log 進行同步更新：
     - 清除失效的 code（在 cache 資料夾中找不到的）
@@ -26,7 +26,7 @@ def update_cachename_log(data_list, cache_dir, namelog_path, code_length=4, avoi
 
     # 🔹 如果有 namelog 檔案，讀進來
     if namelog_path.exists():
-        log_df = {_:None for _ in data_list}
+        log_df = {}
         log_df_old = pickleload(namelog_path)
         cache_walk = PathWalk_df(cache_dir,fileinclude=[".pkl"],name_format="code_time_order.ext")
         avoid_list = cache_walk["code"].unique().tolist()
@@ -49,3 +49,5 @@ def update_cachename_log(data_list, cache_dir, namelog_path, code_length=4, avoi
     picklesave(log_df,namelog_path)
     return log_df
 
+if __name__ == "__main__":
+    cache_data = update_cache(data_list,cachepath,cachepath_namelog,5,"fuzzy")
