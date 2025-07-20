@@ -38,9 +38,6 @@ def update_cache(data_list, cache_dir, namelog_path, code_length=4, avoid_mode="
     cache_dir = Path(cache_dir)
     namelog_path = Path(namelog_path)
 
-    # 🔸 取得目前 cache 目錄下所有 .pkl 檔案的 code 前綴（透過檔名前段）
-    cache_files = [f.stem.split("_")[0] for f in cache_dir.glob("*.pkl")]
-
     # 🔸 如果 namelog 已存在，代表已有歷史對應記錄，要比對與更新
     if namelog_path.exists():
         log_df = {}  # 最終更新的對應表
@@ -62,16 +59,15 @@ def update_cache(data_list, cache_dir, namelog_path, code_length=4, avoid_mode="
                 # ✅ 此 code 在 cache 中仍然有效，保留
                 log_df[key] = code
             else:
-                # ❌ 此 code 已失效，需刪除其對應檔案（若殘留）並重建新的 code
-                for filepath in cache_walk[cache_walk["code"] == code]["path"]:
-                    p = Path(filepath)
-                    if p.exists():
-                        p.unlink()  # 刪除該檔案
-
                 # 🔸 使用 basic_code 建立新的唯一 code，並避免與現有重複
                 code = basic_code(length=code_length, match_mode=avoid_mode, avoid_list=[code])
                 log_df[key] = code
 
+            # ❌ 刪除失效的 code
+            for filepath in cache_walk[~cache_walk["code"].isin(log_df.keys())]["path"]:
+                p = Path(filepath)
+                if p.exists():
+                    p.unlink()  # 刪除該檔案
     else:
         # 🔸 若 namelog 不存在，代表首次建立，需清空資料夾重建快取目錄
         shutil.rmtree(cache_dir)  # 移除整個資料夾（若存在）
