@@ -5,9 +5,10 @@ Created on Fri May 22 23:22:32 2020
 
 @author: mac
 """
+from sqlalchemy.sql.operators import exists
 
 from StevenTricks.df_utils import periodictable, DataFrameMerger
-from StevenTricks.file_utils import logfromfolder,  picklesave, pickleload, sweep_path, PathWalk_df
+from StevenTricks.file_utils import logfromfolder,  picklesave, pickleload, PathWalk_df
 from StevenTricks.control_flow import sleepteller
 from config.conf import collection, dailycollection, product_clean
 from config.col_rename import colname_dic
@@ -19,16 +20,11 @@ from crawler.stock import main
 import pandas as pd
 import datetime
 
-log_info = sweep_path(dbpath_log)
-errorlog_info = sweep_path(dbpath_errorlog)
-productlist_info = sweep_path(dbpath_productlist)
-
-
 if __name__ == "__main__":
     warehouseinit(dbpath)
     # 每一次被當成主要模組呼叫，都會自動生成倉庫資料夾，為了確保一定有資料夾，所以每次使用都要呼叫一次
     # 先判斷有沒有log
-    if log_info["exists"] is True:
+    if exists(dbpath_log) is True:
         log = pickleload(dbpath_log)
         # 有log還要判斷是不是最新的
         if datetime.date.today().isoformat() not in log.index:
@@ -54,7 +50,7 @@ if __name__ == "__main__":
         print("LOG重置成功")
     # 不管有沒有log，在爬蟲啟動之前都會根據目前資料夾的資料來更新log，確保抓取沒有遺漏
     # 再判斷有沒有errorlog
-    if errorlog_info["exists"] is True:
+    if exists(dbpath_errorlog) is True:
         errorlog = pickleload(dbpath_errorlog)
     else:
         errorlog = pd.DataFrame()
@@ -87,7 +83,7 @@ if __name__ == "__main__":
         product_dic[key] = product_df
 
     product = pd.concat(list(product_dic.values()),axis=0)
-    if productlist_info["exists"] is False:
+    if exists(dbpath_productlist) is False:
         picklesave(product, dbpath_productlist)
     else:
         product_old = pickleload(dbpath_productlist)

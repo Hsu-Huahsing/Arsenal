@@ -4,17 +4,15 @@ from StevenTricks.dbsqlite import tosql_df
 from config.conf import collection,fields_span
 from config.col_rename import colname_dic
 from config.paths import dbpath_source,dbpath_cleaned,dbpath_cleaned_log
-from StevenTricks.file_utils import picklesave, pickleload, sweep_path, PathWalk_df
+from StevenTricks.file_utils import picklesave, pickleload, PathWalk_df
 from StevenTricks.dict_utils import keyinstr
-from os.path import join
+from os.path import join,exists
 from itertools import chain
 
 
-log_info = sweep_path(dbpath_cleaned_log)
-
 if __name__ == "__main__":
     dbpath_list = PathWalk_df(dbpath_source, [], ["log"], [], [".pkl"])
-    if log_info["exists"] is True:
+    if exists(dbpath_cleaned_log) is True:
         log = pickleload(dbpath_cleaned_log)
         log_list = log.values.tolist()
         log_list = list(chain.from_iterable(log_list))

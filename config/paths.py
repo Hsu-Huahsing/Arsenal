@@ -18,3 +18,4 @@ dbpath_errorlog = join(dbpath_source, "log", "errorlog.pkl")
 dbpath_productlist = join(dbpath_source, "productlist.pkl")
 
 cachepath = path_dic["stock_twse_db"]["cache"]
+cachepath_namelog = join(cachepath, "namelog.pkl")
