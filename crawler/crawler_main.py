@@ -5,7 +5,7 @@ Created on Fri May 22 23:22:32 2020
 
 @author: mac
 """
-from sqlalchemy.sql.operators import exists
+from os.path import exists
 
 from StevenTricks.df_utils import periodictable, DataFrameMerger
 from StevenTricks.file_utils import logfromfolder,  picklesave, pickleload, PathWalk_df
