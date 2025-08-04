@@ -1,5 +1,5 @@
 from config.conf import dbpath_cleaned,numericol
-from StevenTricks.dbsqlite import readsql_iter
+from StevenTricks.internal_db import readsql_iter
 from StevenTricks.convert_utils import safe_numeric_convert
 from StevenTricks.df_utils import make_series
 import pandas as pd

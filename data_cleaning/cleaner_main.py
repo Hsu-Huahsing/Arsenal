@@ -1,6 +1,6 @@
 import pandas as pd
 from data_cleaning.cleaning_utils import data_cleaned_df, data_cleaned_groups, frameup_safe,key_extract
-from StevenTricks.dbsqlite import tosql_df
+from StevenTricks.internal_db import tosql_df
 from config.conf import collection,fields_span
 from config.col_rename import colname_dic
 from config.paths import dbpath_source,dbpath_cleaned,dbpath_cleaned_log
