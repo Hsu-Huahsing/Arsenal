@@ -21,7 +21,7 @@ dbpath_productlist = join(dbpath_source, "productlist.pkl")
 cachepath = path_dic["stock_twse_db"]["cache"]
 cachepath_namelog = join(cachepath, "namelog.pkl")
 
-dbpath_cleaned_db_df = PathWalk_df(dbpath_cleaned, fileinclude=[".db"])
+dbpath_cleaned_db_df = PathWalk_df(dbpath_cleaned, fileinclude=[".pkl"],level=2)
 
 cleaned_db_dict = {}
 
