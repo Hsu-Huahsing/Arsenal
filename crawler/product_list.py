@@ -11,10 +11,15 @@
 範例使用:
     # 作為獨立執行 (CLI)
     # 終端機下執行，更新本地商品清單資料:
-    $ python product_list.py --update
+    python -m crawler.product_list --update
+    # 或
+    python crawler/product_list.py --update
 
     # 作為模組匯入使用
     from crawler import product_list
+    product_list.main(['--update'])     # 直接更新
+    # 或
+    product_list.update_data()          # 呼叫函式跳過 argparse
 
     # 初始化/更新資料：第一次呼叫會抓取資料並建立本地檔案
     df = product_list.update_data()
@@ -41,7 +46,7 @@ from config.col_rename import colname_dic
 from config.paths import dbpath_productlist
 from StevenTricks.df_utils import DataFrameMerger
 import argparse
-
+from typing import Optional, List
 
 def fetch_product_list(url: str) -> pd.DataFrame:
     """
@@ -213,28 +218,26 @@ def update_data() -> pd.DataFrame:
     return updated_data
 
 
-def main():
-    """
-    處理命令列介面參數並執行相應操作。
-    - 若使用 --update 則抓取最新資料並更新本地資料。
-    - 未提供參數則顯示提示資訊。
-    """
+
+
+def main(argv: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(description="商品清單抓取與更新工具")
     parser.add_argument('--update', action='store_true', help='抓取最新商品清單並更新本地資料')
-    args = parser.parse_args()
+    # 只解析你給的 argv；若沒給，就當成空清單；忽略未知參數
+    args, _unknown = parser.parse_known_args(argv or [])
+
     if args.update:
         print("開始更新商品清單資料...")
         try:
             updated_df = update_data()
             print(f"商品清單更新完成，總計 {len(updated_df)} 筆記錄已儲存至 {dbpath_productlist}")
         except Exception as e:
-            # 捕捉更新過程中的任何錯誤並輸出
             print(f"更新過程發生錯誤: {e}")
     else:
-        # 若未提供任何參數，顯示用法示例
         print("請使用 --update 參數來更新商品清單資料。例如:")
         print("  python product_list.py --update")
 
-
+# 2) 只有當「直接以腳本執行」時，才吃真正的命令列參數
 if __name__ == "__main__":
+    import sys
     main()
