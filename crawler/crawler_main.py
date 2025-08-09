@@ -9,14 +9,14 @@ from os.path import exists
 from StevenTricks.df_utils import periodictable
 from StevenTricks.file_utils import logfromfolder,  pickleio, PathWalk_df
 from config.conf import collection
-from config.paths import dbpath,dbpath_source,dbpath_log,dbpath_errorlog
+from config.paths import db_root,dbpath_source,dbpath_log,dbpath_errorlog
 from schema_utils import warehouseinit
 from crawler.stock import main
 import pandas as pd
 import datetime
 
 if __name__ == "__main__":
-    warehouseinit(dbpath)
+    warehouseinit(db_root)
     # 每一次被當成主要模組呼叫，都會自動生成倉庫資料夾，為了確保一定有資料夾，所以每次使用都要呼叫一次
     # 先判斷有沒有log
     if exists(dbpath_log) is True:

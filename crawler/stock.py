@@ -10,7 +10,7 @@ import requests
 # 匯入你自己的工具套件（StevenTricks）
 from StevenTricks.df_utils import findval                 # 找出 log 中需要處理的資料
 from StevenTricks.net_utils import randomheader         # 隨機 HTTP 請求 header（模擬瀏覽器）
-from StevenTricks.file_utils import picklesave       # 儲存 .pkl 檔案工具
+from StevenTricks.file_utils import pickleio       # 儲存 .pkl 檔案工具
 from StevenTricks.control_flow import sleepteller         # 控制 sleep 時間，避免觸發反爬蟲
 
 # === 配置類別 ===
@@ -28,7 +28,6 @@ class CrawlerConfig:
         self.dbpath_errorlog = dbpath_errorlog          # error log 儲存路徑
         self.request_module = requests                  # HTTP 請求模組
         self.randomheader = randomheader                # 隨機 header 函式
-        self.picklesave = picklesave                    # 儲存函式
         self.sleepteller = sleepteller                  # sleep 控制函式
 
 # === 執行任務主體 ===
@@ -47,8 +46,6 @@ class CrawlerTask:
         # 建立儲存目錄
         datapath = join(self.cfg.dbpath_source, col)
         makedirs(datapath, exist_ok=True)
-        # print("first")
-        # print(type(ind))
         print(ind, col)
 
         try:
@@ -88,7 +85,7 @@ class CrawlerTask:
                 print(type(ind))
                 print(ind)
                 # print(pd.to_datetime(ind))
-                self.cfg.picklesave(self.cfg.log, self.cfg.dbpath_log)
+                pickleio(data=self.cfg.log, path=self.cfg.dbpath_log,mode="save")
                 return
         else:
             # 非 200 回應（如 403、500），需記錄錯誤
@@ -99,20 +96,20 @@ class CrawlerTask:
         data['crawlerdic'] = crawlerdic
         data['request'] = res
         filename = join(datapath, f"{col}_{ind}.pkl")
-        self.cfg.picklesave(data, filename)
+        pickleio(data=data, path=filename, mode="save")
 
         # 若資料頻率是月頻，清除當月舊檔案
         if crawlerdic.get('freq') == 'M':
             self._clean_monthly_files(ind, col, datapath)
 
         # 儲存更新後 log
-        self.cfg.picklesave(self.cfg.log, self.cfg.dbpath_log)
+        pickleio(data=self.cfg.log, path=self.cfg.dbpath_log,mode="save")
 
     # === 中斷處理 ===
     def _handle_interrupt(self):
         print("KeyboardInterrupt ... content saving")
-        self.cfg.picklesave(self.cfg.log, self.cfg.dbpath_log)
-        self.cfg.picklesave(self.cfg.errorlog, self.cfg.dbpath_errorlog)
+        pickleio(data=self.cfg.log, path=self.cfg.dbpath_log,mode="save")
+        pickleio(data=self.cfg.errorlog, path=self.cfg.dbpath_errorlog,mode="save")
         print("Log saved .")
         sys.exit()
 
@@ -135,8 +132,8 @@ class CrawlerTask:
             'errormessage3': 'request failed'
         }
         self.cfg.errorlog.loc[ind, col] = [errordic]
-        self.cfg.picklesave(self.cfg.log, self.cfg.dbpath_log)
-        self.cfg.picklesave(self.cfg.errorlog, self.cfg.dbpath_errorlog)
+        pickleio(data=self.cfg.log, path=self.cfg.dbpath_log,mode="save")
+        pickleio(data=self.cfg.errorlog, path=self.cfg.dbpath_errorlog,mode="save")
         self.cfg.sleepteller(mode='long')
 
     # === 回應狀態錯誤（如 403, 500） ===
@@ -154,8 +151,8 @@ class CrawlerTask:
             'errormessage1': 'result error'
         }
         self.cfg.errorlog.loc[ind, col] = [errordic]
-        self.cfg.picklesave(self.cfg.log, self.cfg.dbpath_log)
-        self.cfg.picklesave(self.cfg.errorlog, self.cfg.dbpath_errorlog)
+        pickleio(data=self.cfg.log, path=self.cfg.dbpath_log,mode="save")
+        pickleio(data=self.cfg.errorlog, path=self.cfg.dbpath_errorlog,mode="save")
         self.cfg.sleepteller(mode='long')
 
     # === 月頻資料：只留當天，刪除當月過往 ===
