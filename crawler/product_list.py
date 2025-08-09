@@ -115,6 +115,7 @@ def fetch_all_products() -> pd.DataFrame:
         raise KeyError(f"無法取得 dailycollection 中 stocklist 的配置: {e}")
     # 逐一抓取每個市場的商品清單
     for model in model_list:
+        print(f"開始抓取{model}")
         url = url_template.format(str(model))
         df = fetch_product_list(url)
         # 暫存原始 DataFrame
@@ -239,5 +240,7 @@ def main(argv: Optional[List[str]] = None) -> None:
 
 # 2) 只有當「直接以腳本執行」時，才吃真正的命令列參數
 if __name__ == "__main__":
-    import sys
-    main()
+    main(['--update'])
+
+
+    # test=pickleio(dbpath_productlist, mode="load")
