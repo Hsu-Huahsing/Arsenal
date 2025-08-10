@@ -10,22 +10,12 @@ TWSE 清理器：合併自 data_cleaning/cleaner_main.py + cleaning_utils.py
 - 每個函式可單獨測試
 - 重複/冗餘邏輯已精簡（欄名歸一處理等）
 
-依賴（請對齊你專案實際模組）
-- StevenTricks.file_utils: pickleio, PathWalk_df
-- StevenTricks.convert_utils: safe_replace, safe_numeric_convert, changetype_stringtodate
-- StevenTricks.dict_utils: keyinstr
-- StevenTricks.internal_db: tosql_df
-- config.conf: collection, fields_span, dropcol, key_set
-- config.col_rename: colname_dic, transtonew_col
-- config.col_format: numericol, datecol
-- config.paths: dbpath_source, dbpath_clean(或fallback), dbpath_clean_log(或fallback)
 
 用法（CLI）
     清理所有類別：
         python -m data_cleaning.twse
     只清理指定類別（資料夾名/collection key）：
         python -m data_cleaning.twse --col 每日收盤行情 信用交易統計
-
 
 用法（import）
     from data_cleaning.twse import process_twse_data, clean_one_dataframe
@@ -72,11 +62,11 @@ import pandas as pd
 
 # ---- StevenTricks 與 config ----
 from StevenTricks.file_utils import pickleio
-from StevenTricks.file_utils import PathWalk_df as _PathWalk_df
+from StevenTricks.file_utils import PathWalk_df
 
 from StevenTricks.convert_utils import safe_replace, safe_numeric_convert, changetype_stringtodate
 from StevenTricks.dict_utils import keyinstr
-from StevenTricks import internal_db as db
+from StevenTricks.internal_db import DBPkl
 
 from config.conf import collection, fields_span, dropcol, key_set
 from config.col_rename import colname_dic, transtonew_col
@@ -193,7 +183,7 @@ def _list_source_pickles(root: str) -> pd.DataFrame:
     列出 root 下所有 .pkl 檔；回傳 DataFrame 包含 columns: file, path, dir（上層資料夾名）
     優先用 StevenTricks.PathWalk_df
     """
-    df = _PathWalk_df(root, [], ["log"], [".DS_Store"], [".pkl"])  # 依你的慣例
+    df = PathWalk_df(root, [], ["log"], [".DS_Store","productlist"], [".pkl"])  # 依你的慣例
     # 期待有 'file', 'path', 'dir' 欄；若沒有就補
     need_cols = {"file", "path", "dir"}
     have = set(df.columns)
@@ -207,40 +197,87 @@ def _list_source_pickles(root: str) -> pd.DataFrame:
 
 
 # ---- 解析 TWSE API 結構 → 子表 dict list ----
-def key_extract(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
+def key_extract(dic: dict) -> list[dict]:
     """
-    依 key_set 規則自 raw 結構中抽出子表字典。
-    期望每個子表都至少帶有：title, fields, data
+    依據全域 key_set 從 raw dict 擷取多個「子表」片段 (fields/data/title/...)，
+    同時支援：
+      - step == "main1"：帶序號切片（如 fields, fields1, fields2, ...）
+      - 其他 step（如 "set1"）：一次聚合
+      - raw["tables"]：若存在且為 list，逐一用相同規則抽取
+    回傳：list[dict]，例如 [{"fields":..., "data":..., "title":..., "groups":..., "notes":...}, ...]
     """
-    dict_list: List[Dict[str, Any]] = []
-    # 1) 直屬 keys（常見 TWSE 回傳）
-    for ks in key_set:  # e.g., [{"fields": "fields", "data":"data", "title":"title"}] 這類規格
-        fields_key = ks.get("fields")
-        data_key = ks.get("data")
-        title_key = ks.get("title")
-        if fields_key in raw and data_key in raw:
-            entry = {
-                "fields": raw.get(fields_key),
-                "data": raw.get(data_key),
-                "title": raw.get(title_key, None),
-            }
-            dict_list.append(entry)
+    if not isinstance(dic, dict):
+        raise TypeError(f"key_extract() expects dict, got {type(dic).__name__}")
+
+    out: list[dict] = []
+
+    def _listify(x):
+        # 設定允許寫成字串或清單；統一轉清單
+        return x if isinstance(x, (list, tuple)) else [x]
+
+    def _find_first_key(container: dict, aliases: list[str]) -> tuple[str, bool]:
+        """
+        在 container 裡依序找第一個存在的別名鍵；回傳 (命中的鍵名, 是否命中)
+        """
+        for k in aliases:
+            if k in container:
+                return k, True
+        return "", False
+
+    def _extract_from_container(container: dict) -> list[dict]:
+        """
+        依 key_set 規則，從單一 container (通常是 raw 或 raw 的一個 table dict) 抽出子表。
+        """
+        dicts: list[dict] = []
+        for step, set_i in key_set.items():
+            if not isinstance(set_i, dict):
+                continue
+
+            if step == "main1":
+                # 完全復刻你原本的停止條件：cnt > 1 且沒命中就停止
+                cnt = 0
+                while True:
+                    curr: dict = {}
+                    for key_name, alias_list in set_i.items():
+                        aliases = _listify(alias_list)
+                        # cnt==0 用原名；cnt>0 用 f"{alias}{cnt}"
+                        candidates = [a if cnt == 0 else f"{a}{cnt}" for a in aliases]
+                        hit_key, ok = _find_first_key(container, candidates)
+                        if ok:
+                            curr[key_name] = container[hit_key]
+
+                    if curr:
+                        dicts.append(curr)
+                    elif cnt > 1:
+                        # 與原碼邏輯等價：cnt>1 且無命中 → break
+                        break
+
+                    cnt += 1
+
+            else:
+                # 非 main1：只做一次聚合
+                curr: dict = {}
+                for key_name, alias_list in set_i.items():
+                    aliases = _listify(alias_list)
+                    hit_key, ok = _find_first_key(container, aliases)
+                    if ok:
+                        curr[key_name] = container[hit_key]
+                if curr:
+                    dicts.append(curr)
+
+        return dicts
+
+    # 1) 先從 raw 本體抽
+    out.extend(_extract_from_container(dic))
+
     # 2) 若 raw 中還有 tables（多表），逐一處理
-    tables = raw.get("tables")
+    tables = dic.get("tables")
     if isinstance(tables, list):
         for t in tables:
-            for ks in key_set:
-                fields_key = ks.get("fields")
-                data_key = ks.get("data")
-                title_key = ks.get("title")
-                if isinstance(t, dict) and (fields_key in t and data_key in t):
-                    entry = {
-                        "fields": t.get(fields_key),
-                        "data": t.get(data_key),
-                        "title": t.get(title_key, None),
-                    }
-                    dict_list.append(entry)
-    return dict_list
+            if isinstance(t, dict):
+                out.extend(_extract_from_container(t))
+
+    return out
 
 
 # ---- 兩種 DataFrame 組裝 ----
@@ -272,7 +309,6 @@ def data_cleaned_groups(d: Dict[str, Any], span_cfg: Dict[str, Any]) -> pd.DataF
     if not groups:
         raise DataCleanError("data_cleaned_groups：span_cfg 缺少 groups")
     # 計算每群組欄位數，產生目標欄名
-    df_list = []
     start = 0
     col_names: List[str] = []
     for g in groups:
@@ -305,33 +341,29 @@ def finalize_dataframe(
     """
     # 1) 移除不需要的欄（例如 漲跌(+/-)）
     drop_cfg = (dropcol.get(item) or {}).get(subitem) or []
-    for c in drop_cfg:
-        if c in df.columns:
-            df = df.drop(columns=[c])
+    df = df.drop(columns=drop_cfg, errors="ignore")
     # 2) 欄名舊→新（細項規則）
     rename_cfg = (transtonew_col.get(item) or {}).get(subitem) or {}
     if rename_cfg:
         df = df.rename(columns=rename_cfg)
     # 3) 數值欄位轉換
     num_cfg = (numericol.get(item) or {}).get(subitem) or []
-    for c in num_cfg:
-        if c in df.columns:
-            df[c] = safe_numeric_convert(df[c])  # 逗號、空白會被處理；非法轉 NaN（不丟列）
+    df = safe_numeric_convert(df, num_cfg)
+
     # 4) 日期欄位轉換（若有指定 datecol）
     date_cfg = (datecol.get(item) or {}).get(subitem) or []
-    for c in date_cfg:
-        if c in df.columns:
-            try:
-                df[c] = changetype_stringtodate(df[c], mode=3)  # 你專案原本使用 mode=3（常見 ROC/多格式）
-            except Exception as e:
-                # 報出第一個壞值、型別
-                bad = df[c].iloc[0]
-                raise DataCleanError(
-                    "日期欄位轉換失敗",
-                    item=item, subitem=subitem, column=c,
-                    value=bad, value_type=type(bad).__name__,
-                    hint="請補充 changetype_stringtodate 規則或前置清理邏輯",
-                ) from e
+    try:
+        df = changetype_stringtodate(df,datecol=date_cfg, mode=3)  # 你專案原本使用 mode=3（常見 ROC/多格式）
+    except Exception as e:
+        # 報出第一個壞值、型別
+        bad = df
+        raise DataCleanError(
+            "日期欄位轉換失敗",
+            item=item, subitem=subitem, column=date_cfg,
+            value=bad, value_type=type(bad).__name__,
+            hint="請補充 changetype_stringtodate 規則或前置清理邏輯",
+        ) from e
+
     # 5) 若沒有任何日期欄，補一個統一 'date'
     if "date" not in df.columns:
         df.insert(0, "date", pd.to_datetime(date_key, format="%Y-%m-%d"))
@@ -380,7 +412,17 @@ def _write_to_db(df: pd.DataFrame, *, item: str, subitem: str) -> None:
         pk = ["date"]
     db_path = _db_path_for_item(item)
     logger.debug(f"寫入 DB：{db_path} 表={subitem} PK={pk}")
-    db.tosql_df(df, db_path, subitem, pk)  # 依 StevenTricks 目前介面
+
+    dbi = DBPkl(db_path, subitem)
+    try:
+        dbi.write_db(df, primary_key=(pk if pk else None))
+    except Exception as e:
+        # 若 DBPkl 暴露 schema_conflict，順手打在 debug 便於你定位
+        conflict = getattr(dbi, "schema_conflict", None)
+        if conflict:
+            logger.debug(f"[DB schema conflict] {conflict}")
+        # 嚴格策略：遇錯就停
+        raise
 
 
 # ---- 清洗一個檔案（主流程子步驟） ----
@@ -397,12 +439,7 @@ def _process_one_file(file_path: str) -> Tuple[str, str, str]:
     if not isinstance(raw, dict):
         raise DataCleanError("原始 pkl 非 dict 結構", file=file_name)
 
-    # 特例：productlist 之類的靜態表，直接轉存 DB 或放過
     base, _ = splitext(file_name)
-    if base.lower() == "productlist":
-        # 你若需要寫入 DB，也可在此處理；此處先略過
-        logger.info("偵測到 productlist.pkl：略過清洗流程（需另行定義）")
-        return ("1970-01-01", parentdir, file_name)
 
     # 取 crawler 取得日
     try:
@@ -452,6 +489,7 @@ def _process_one_file(file_path: str) -> Tuple[str, str, str]:
         # 組裝 DataFrame（群組 or 平面）
         try:
             span_cfg = _get_span_cfg(parentdir, subitem)
+
             if not span_cfg:
                 raise DataCleanError("找不到群組欄位設定", item=parentdir, subitem=subitem)
 
@@ -553,4 +591,24 @@ def main(argv: Optional[List[str]] = None) -> None:
 
 
 if __name__ == "__main__":
-    main()
+    main([])
+
+raw = {
+    "fields": ["A","B"],
+    "data": [[1,2]],
+    "title": "主表",
+    "groups": None,
+    "tables": [
+        {"fields1": ["X","Y"], "data1": [[9,8]], "subtitle": "子表一"},
+        {"creditFields": ["C1","C2"], "creditList": [[3,4]], "creditTitle": "信用表"},
+    ],
+}
+# 你的 key_set 如題
+lst = key_extract(raw)
+for i, d in enumerate(lst, 1):
+    print(i, d.keys())  # 應能看到 fields/data/title/groups/notes 等鍵依規則被抽出
+
+
+
+
+raw = pickleio(path=r"/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock/twse/source/三大法人買賣超日報/三大法人買賣超日報_2020-08-18.pkl", mode="load")
