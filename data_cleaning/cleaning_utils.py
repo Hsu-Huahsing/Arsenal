@@ -106,3 +106,6 @@ def data_cleaned_groups(data_dict):
     df_main.columns = df_col
     data_dict["data_cleaned"] = df_main
     return data_dict
+
+if __name__ == "__main__":
+    pass
