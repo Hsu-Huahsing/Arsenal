@@ -397,12 +397,37 @@ def update_data() -> None:
         try:
             crawler.run_task(ind, col)
         except Exception as e:
-            # 對於致命錯誤（例如 HTTP 403 被封鎖），中止整個更新流程
+            # 紀錄發生錯誤的任務索引與類型
             logger.error(f"任務過程中止於 {ind} - {col}: {e}")
-            # 儲存目前 log/errorlog 再拋出
-            pickleio(data=config.log, path=config.dbpath_log, mode="save")
-            pickleio(data=config.errorlog, path=config.dbpath_errorlog, mode="save")
-            raise
+            # 檢查是否為日期轉換的特殊錯誤
+            if isinstance(e, ValueError) and "strftime" in str(e):
+                # 1. 原始 ind 值與型別
+                logger.error(f"原始 ind 值: {repr(ind)} (類型: {type(ind).__name__})")
+                # 2. 錯誤任務的資料項目名稱
+                logger.error(f"該任務的資料項目 (col): {col}")
+                # 3. 完整的 traceback
+                logger.error("完整的 traceback:\n" + format_exc())
+                # 4. log DataFrame 中該索引的列內容
+                if pd.isna(ind):
+                    # ind 為 NaN 類型，需特別處理
+                    problem_rows = config.log[config.log.index.isna()]
+                    if not problem_rows.empty:
+                        logger.error(f"log 資料表中索引為 NaN 的列資料:\n{problem_rows}")
+                    else:
+                        logger.error("log 資料表中沒有索引為 NaN 的資料列。")
+                else:
+                    try:
+                        row_data = config.log.loc[[ind]]
+                        logger.error(f"log 資料表中索引 {ind} 的列資料:\n{row_data}")
+                    except Exception as e2:
+                        logger.error(f"無法取得 log 中索引 {ind} 的列資料: {e2}")
+                logger.error("因日期轉換錯誤，程式已停止執行。")
+                # **不**儲存 log.pkl 和 errorlog.pkl，直接Raise中止
+            else:
+                # 非日期轉換類錯誤，維持原行為：保存日誌檔案後再中止
+                pickleio(data=config.log, path=config.dbpath_log, mode="save")
+                pickleio(data=config.errorlog, path=config.dbpath_errorlog, mode="save")
+            raise  # 中止迴圈，向上拋出異常
 
     # 爬蟲任務結束後，統一將 log 和 errorlog 儲存
     pickleio(data=config.log, path=config.dbpath_log, mode="save")
