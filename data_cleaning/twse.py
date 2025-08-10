@@ -26,32 +26,53 @@ TWSE 清理器：合併自 data_cleaning/cleaner_main.py + cleaning_utils.py
     只清理指定類別（資料夾名/collection key）：
         python -m data_cleaning.twse --col 每日收盤行情 信用交易統計
 
+
 用法（import）
     from data_cleaning.twse import process_twse_data, clean_one_dataframe
     process_twse_data(["每日收盤行情"])
     # 或單測：
     df2 = clean_one_dataframe(df_raw, item="每日收盤行情", subitem="個股", date="2025-08-10")
-"""
 
-from __future__ import annotations
+    from data_cleaning.twse import process_twse_data
+
+    # 清全部
+    process_twse_data()
+
+    # 或只清特定集合
+    process_twse_data(["每日收盤行情"])
+
+    import pandas as pd
+    from data_cleaning.twse import clean_one_dataframe
+
+    # 假資料：欄名會先經過 colname_dic 與 HTML 清理
+    raw = pd.DataFrame(
+        [["114/08/05", "2330", "10,000", "1,234.5"]],
+        columns=["日期", "代號", "成交股數", "收盤價</br>"]
+    )
+
+    cleaned = clean_one_dataframe(
+        raw,
+        item="每日收盤行情",
+        subitem="個股",
+        date="2025-08-10"  # 若無日期欄，會用這個補 'date'
+    )
+    print(cleaned.dtypes)
+    print(cleaned.head())
+
+
+"""
 import argparse
 import logging
-from dataclasses import dataclass
 from os import makedirs
-from os import walk
-from os.path import dirname, exists, join, splitext, basename
+from os.path import exists, join, splitext, basename
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
 # ---- StevenTricks 與 config ----
 from StevenTricks.file_utils import pickleio
-try:
-    # 新版若有 PathWalk_df，用它；沒有就走 fallback
-    from StevenTricks.file_utils import PathWalk_df as _PathWalk_df  # type: ignore
-except Exception:
-    _PathWalk_df = None  # fallback 使用 os.walk
+from StevenTricks.file_utils import PathWalk_df as _PathWalk_df
 
 from StevenTricks.convert_utils import safe_replace, safe_numeric_convert, changetype_stringtodate
 from StevenTricks.dict_utils import keyinstr
@@ -60,22 +81,7 @@ from StevenTricks import internal_db as db
 from config.conf import collection, fields_span, dropcol, key_set
 from config.col_rename import colname_dic, transtonew_col
 from config.col_format import numericol, datecol
-
-# 路徑：若新清洗路徑未定義，fallback 至 source 同層的 cleaned
-try:
-    from config.paths import dbpath_source  # 原始 pkl 的根目錄（crawler 產物）
-except Exception as e:
-    raise ImportError("config.paths 需要提供 dbpath_source（TWSE 原始資料根目錄）") from e
-
-try:
-    from config.paths import dbpath_clean  # 清洗後 SQLite 目錄
-except Exception:
-    dbpath_clean = join(dirname(dbpath_source), "cleaned")
-
-try:
-    from config.paths import dbpath_clean_log  # 清洗完成 log（pickle）
-except Exception:
-    dbpath_clean_log = join(dbpath_clean, "clean_log.pkl")
+from config.paths import dbpath_source, dbpath_cleaned, dbpath_cleaned_log  # 原始 pkl 的根目錄（crawler 產物 清洗後 SQLite 目錄 清洗完成 log（pickle）
 
 
 # ---- Logging：預設 DEBUG ----
@@ -89,6 +95,29 @@ if not _root.handlers:
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
+def _get_span_cfg(item: str, subitem: str) -> Optional[dict]:
+    """
+    依序嘗試：
+      1) fields_span[item][subitem]
+      2) fields_span[subitem]
+    有哪個就用哪個；都沒有回傳 None。
+    """
+    by_item = (fields_span.get(item, {}) or {}).get(subitem)
+    direct  = fields_span.get(subitem)
+    return by_item or direct
+
+def _resolve_pk(df: pd.DataFrame) -> List[str]:
+    """
+    依欄位自動決定主鍵（供 db.tosql_df 使用）：
+      - 同時有「代號」與「date」→ ["代號","date"]
+      - 只有「date」         → ["date"]
+      - 其他                  → []
+    """
+    if "代號" in df.columns and "date" in df.columns:
+        return ["代號", "date"]
+    if "date" in df.columns:
+        return ["date"]
+    return []
 
 # ---- 自訂錯誤類，讓錯誤情境更清楚 ----
 class DataCleanError(RuntimeError):
@@ -162,32 +191,19 @@ def _to_date_key(s: Any) -> str:
 def _list_source_pickles(root: str) -> pd.DataFrame:
     """
     列出 root 下所有 .pkl 檔；回傳 DataFrame 包含 columns: file, path, dir（上層資料夾名）
-    優先用 StevenTricks.PathWalk_df，否則 fallback os.walk
+    優先用 StevenTricks.PathWalk_df
     """
-    if _PathWalk_df is not None:
-        df = _PathWalk_df(root, [], ["log"], [".DS_Store"], [".pkl"])  # 依你的慣例
-        # 期待有 'file', 'path', 'dir' 欄；若沒有就補
-        need_cols = {"file", "path", "dir"}
-        have = set(df.columns)
-        if not need_cols.issubset(have):
-            # 嘗試補齊
-            if "path" not in df.columns:
-                raise DataCleanError("PathWalk_df 缺少 path 欄")
-            df["file"] = df["path"].map(lambda p: basename(p))
-            df["dir"] = df["path"].map(lambda p: Path(p).parent.name)
-        return df[["file", "path", "dir"]].copy()
-
-    # fallback
-    rows = []
-    for dp, dnames, fnames in walk(root):
-        # 排除 log 目錄
-        if Path(dp).name.lower() == "log":
-            continue
-        for fn in fnames:
-            if splitext(fn)[1].lower() == ".pkl":
-                p = join(dp, fn)
-                rows.append({"file": fn, "path": p, "dir": Path(dp).name})
-    return pd.DataFrame(rows)
+    df = _PathWalk_df(root, [], ["log"], [".DS_Store"], [".pkl"])  # 依你的慣例
+    # 期待有 'file', 'path', 'dir' 欄；若沒有就補
+    need_cols = {"file", "path", "dir"}
+    have = set(df.columns)
+    if not need_cols.issubset(have):
+        # 嘗試補齊
+        if "path" not in df.columns:
+            raise DataCleanError("PathWalk_df 缺少 path 欄")
+        df["file"] = df["path"].map(lambda p: basename(p))
+        df["dir"] = df["path"].map(lambda p: Path(p).parent.name)
+    return df[["file", "path", "dir"]].copy()
 
 
 # ---- 解析 TWSE API 結構 → 子表 dict list ----
@@ -197,7 +213,6 @@ def key_extract(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
     期望每個子表都至少帶有：title, fields, data
     """
     dict_list: List[Dict[str, Any]] = []
-
     # 1) 直屬 keys（常見 TWSE 回傳）
     for ks in key_set:  # e.g., [{"fields": "fields", "data":"data", "title":"title"}] 這類規格
         fields_key = ks.get("fields")
@@ -210,7 +225,6 @@ def key_extract(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "title": raw.get(title_key, None),
             }
             dict_list.append(entry)
-
     # 2) 若 raw 中還有 tables（多表），逐一處理
     tables = raw.get("tables")
     if isinstance(tables, list):
@@ -226,7 +240,6 @@ def key_extract(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
                         "title": t.get(title_key, None),
                     }
                     dict_list.append(entry)
-
     return dict_list
 
 
@@ -238,10 +251,8 @@ def frameup_safe(d: Dict[str, Any]) -> pd.DataFrame:
     """
     fields = list(d.get("fields") or [])
     rows = list(d.get("data") or [])
-
     if not fields or not rows:
         raise DataCleanError("frameup_safe：缺少 fields 或 data")
-
     # 截斷每列到 len(fields)，避免野欄位
     trimmed = [r[: len(fields)] for r in rows]
     df = pd.DataFrame(trimmed, columns=_normalize_cols(fields))
@@ -257,11 +268,9 @@ def data_cleaned_groups(d: Dict[str, Any], span_cfg: Dict[str, Any]) -> pd.DataF
     rows = list(d.get("data") or [])
     if not fields or not rows:
         raise DataCleanError("data_cleaned_groups：缺少 fields 或 data")
-
     groups = span_cfg.get("groups")
     if not groups:
         raise DataCleanError("data_cleaned_groups：span_cfg 缺少 groups")
-
     # 計算每群組欄位數，產生目標欄名
     df_list = []
     start = 0
@@ -276,7 +285,6 @@ def data_cleaned_groups(d: Dict[str, Any], span_cfg: Dict[str, Any]) -> pd.DataF
         seg_cols = [f"{prefix}{c}" for c in seg_fields]
         col_names.extend(seg_cols)
         start = end
-
     # 砍尾（若 fields 比群組總長還長），或不足（補空欄）→ 皆以「不刪列」為原則
     total = len(col_names)
     trimmed = [ (r[:total] + [None] * max(0, total - len(r))) for r in rows ]
@@ -300,18 +308,15 @@ def finalize_dataframe(
     for c in drop_cfg:
         if c in df.columns:
             df = df.drop(columns=[c])
-
     # 2) 欄名舊→新（細項規則）
     rename_cfg = (transtonew_col.get(item) or {}).get(subitem) or {}
     if rename_cfg:
         df = df.rename(columns=rename_cfg)
-
     # 3) 數值欄位轉換
     num_cfg = (numericol.get(item) or {}).get(subitem) or []
     for c in num_cfg:
         if c in df.columns:
             df[c] = safe_numeric_convert(df[c])  # 逗號、空白會被處理；非法轉 NaN（不丟列）
-
     # 4) 日期欄位轉換（若有指定 datecol）
     date_cfg = (datecol.get(item) or {}).get(subitem) or []
     for c in date_cfg:
@@ -327,16 +332,13 @@ def finalize_dataframe(
                     value=bad, value_type=type(bad).__name__,
                     hint="請補充 changetype_stringtodate 規則或前置清理邏輯",
                 ) from e
-
     # 5) 若沒有任何日期欄，補一個統一 'date'
     if "date" not in df.columns:
         df.insert(0, "date", pd.to_datetime(date_key, format="%Y-%m-%d"))
-
     # 6) 欄位順序微整：把常見鍵放前面
     front = [c for c in ["date", "代號"] if c in df.columns]
     rest = [c for c in df.columns if c not in front]
     df = df[front + rest]
-
     return df
 
 
@@ -360,8 +362,8 @@ def clean_one_dataframe(
 
 # ---- 寫入資料庫 ----
 def _db_path_for_item(item: str) -> str:
-    _ensure_dir(dbpath_clean)
-    return join(dbpath_clean, f"{item}.db")
+    _ensure_dir(dbpath_cleaned)
+    return join(dbpath_cleaned, f"{item}.db")
 
 
 def _write_to_db(df: pd.DataFrame, *, item: str, subitem: str) -> None:
@@ -417,6 +419,13 @@ def _process_one_file(file_path: str) -> Tuple[str, str, str]:
     else:
         subtitle_allowed = [colname_dic.get(x, x) for x in (collection.get(parentdir, {}).get("subtitle") or [parentdir])]
 
+    if not subtitle_allowed:
+        raise RuntimeError(
+            f"subtitle_allowed 為空，無法判定清理目標；"
+            f"file={file_name}, item={parentdir}. "
+            f"請檢查 crawlerdic.subtitle 或 config.collection['{parentdir}']['subtitle']"
+        )
+
     # 取所有子表（title, fields, data）
     sub_tables = key_extract(raw)
     if not sub_tables:
@@ -442,13 +451,9 @@ def _process_one_file(file_path: str) -> Tuple[str, str, str]:
 
         # 組裝 DataFrame（群組 or 平面）
         try:
-            if subitem in (fields_span.get(parentdir) or {}) or subitem in fields_span:
-                # 支援兩種配置：以 item 為 key，或以 subitem 為 key
-                span_cfg = (fields_span.get(parentdir, {}).get(subitem)) or (fields_span.get(subitem))
-                if not span_cfg:
-                    raise DataCleanError("找不到群組欄位設定", item=parentdir, subitem=subitem)
-            else:
-                span_cfg = None
+            span_cfg = _get_span_cfg(parentdir, subitem)
+            if not span_cfg:
+                raise DataCleanError("找不到群組欄位設定", item=parentdir, subitem=subitem)
 
             if span_cfg:
                 df0 = data_cleaned_groups({"fields": fields, "data": data}, span_cfg)
@@ -482,10 +487,10 @@ def process_twse_data(cols: Optional[List[str]] = None) -> None:
     參數：
       cols: 要清的 collection 類別（資料夾名）；None 表示全部
     """
-    _ensure_dir(dbpath_clean)
+    _ensure_dir(dbpath_cleaned)
     # 載入或建立清洗 log（紀錄已處理檔名，避免重複清）
-    if exists(dbpath_clean_log):
-        clean_log = pickleio(path=dbpath_clean_log, mode="load")
+    if exists(dbpath_cleaned_log):
+        clean_log = pickleio(path=dbpath_cleaned_log, mode="load")
         # 支援 DataFrame 或 set：都轉為 set of file names
         if isinstance(clean_log, pd.DataFrame):
             done = set([x for x in clean_log.values.ravel() if isinstance(x, str)])
@@ -529,8 +534,8 @@ def process_twse_data(cols: Optional[List[str]] = None) -> None:
             done.add(file_name)
 
         # 即時存檔（避免中途中斷丟進度）
-        pickleio(data=clean_log if isinstance(clean_log, pd.DataFrame) else done,
-                 path=dbpath_clean_log, mode="save")
+        pickleio(data= clean_log if isinstance(clean_log, pd.DataFrame) else done,
+                 path= dbpath_cleaned_log, mode="save")
         logger.info(f"完成：{file_name}（date={date_key}, item={item}）")
 
 
