@@ -397,7 +397,7 @@ def _db_path_for_item(item: str) -> str:
     return join(dbpath_cleaned, f"{item}.db")
 
 
-def _write_to_db(df: pd.DataFrame, *, item: str, subitem: str) -> None:
+def _write_to_db(df: pd.DataFrame, convert_mode="upcast", *, item: str, subitem: str) -> None:
     """
     預設 PK 規則：
       - 同時有 '代號' 與 'date' → ['代號','date']
@@ -414,7 +414,7 @@ def _write_to_db(df: pd.DataFrame, *, item: str, subitem: str) -> None:
 
     dbi = DBPkl(db_path, subitem)
     try:
-        dbi.write_db(df, primary_key=(pk if pk else None))
+        dbi.write_db(df,convert_mode=convert_mode, primary_key=(pk if pk else None))
     except Exception as e:
         # 若 DBPkl 暴露 schema_conflict，順手打在 debug 便於你定位
         conflict = getattr(dbi, "schema_conflict", None)
