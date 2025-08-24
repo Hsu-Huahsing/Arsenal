@@ -490,9 +490,6 @@ def _process_one_file(file_path: str) -> Tuple[str, str, str]:
         try:
             span_cfg = _get_span_cfg(parentdir, subitem)
 
-            if not span_cfg:
-                raise DataCleanError("找不到群組欄位設定", item=parentdir, subitem=subitem)
-
             if span_cfg:
                 df0 = data_cleaned_groups({"fields": fields, "data": data}, span_cfg)
             else:
