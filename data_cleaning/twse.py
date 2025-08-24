@@ -340,8 +340,7 @@ def finalize_dataframe(
     依 config 規則產生最終清洗後 DataFrame；遇到未知欄位/型別問題直接丟 DataCleanError。
     """
     # 1) 移除不需要的欄（例如 漲跌(+/-)）
-    drop_cfg = (dropcol.get(item) or {}).get(subitem) or []
-    df = df.drop(columns=drop_cfg, errors="ignore")
+    df = df.drop(columns=dropcol, errors="ignore")
     # 2) 欄名舊→新（細項規則）
     rename_cfg = (transtonew_col.get(item) or {}).get(subitem) or {}
     if rename_cfg:
