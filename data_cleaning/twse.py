@@ -248,8 +248,8 @@ def frameup_safe(d: Dict[str, Any]) -> pd.DataFrame:
     無群組欄位：直接以 d['fields'] 對齊 d['data']。
     若 data 的欄數 > fields，超出者丟棄（結構噪音），但不丟列。
     """
-    fields = list(d.get("fields") or [])
-    rows = list(d.get("data") or [])
+    fields = list(d.get("fields",[]))
+    rows = list(d.get("data",[]))
     if not fields or not rows:
         raise DataCleanError("frameup_safe：缺少 fields 或 data")
     # 截斷每列到 len(fields)，避免野欄位
@@ -263,8 +263,8 @@ def data_cleaned_groups(d: Dict[str, Any], span_cfg: Dict[str, Any]) -> pd.DataF
     有群組欄位（如 融資/融券）：
     span_cfg 例： {"groups": [{"prefix":"融資_", "size":5}, {"prefix":"融券_","size":5}], "index": ["日期","代號",...]}
     """
-    fields = list(d.get("fields") or [])
-    rows = list(d.get("data") or [])
+    fields = list(d.get("fields",[]))
+    rows = list(d.get("data",[]))
     if not fields or not rows:
         raise DataCleanError("data_cleaned_groups：缺少 fields 或 data")
     groups = span_cfg.get("groups")
@@ -304,15 +304,15 @@ def finalize_dataframe(
     # 1) 移除不需要的欄（例如 漲跌(+/-)）
     df = df.drop(columns=dropcol, errors="ignore")
     # 2) 欄名舊→新（細項規則）
-    rename_cfg = (transtonew_col.get(item) or {}).get(subitem) or {}
+    rename_cfg = transtonew_col.get(item,{}).get(subitem,{})
     if rename_cfg:
         df = df.rename(columns=rename_cfg)
     # 3) 數值欄位轉換
-    num_cfg = (numericol.get(item) or {}).get(subitem) or []
+    num_cfg = numericol.get(item,{}).get(subitem,{})
     df = safe_numeric_convert(df, num_cfg)
 
     # 4) 日期欄位轉換（若有指定 datecol）
-    date_cfg = (datecol.get(item) or {}).get(subitem) or []
+    date_cfg = datecol.get(item,{}).get(subitem,{})
     try:
         df = stringtodate(df,datecol=date_cfg, mode=3)  # 你專案原本使用 mode=3（常見 ROC/多格式）
     except Exception as e:
@@ -418,14 +418,13 @@ def _process_one_file(file_path: str) -> Tuple[str, str, str]:
 
     # 取 crawler 取得日
     try:
-        date_raw = raw.get("crawlerdic").get("payload").get("date")
-        date_key = stringtodate(date_raw,mode=3)
+        date_key = raw.get("crawlerdic",{}).get("payload",{}).get("date")
     except Exception as e:
         raise DataCleanError("無法取得 crawler 日期", file=file_name, item=parentdir, value=raw.get("crawlerdic")) from e
 
     # 決定允許的子表（標準化後）
     # 以 crawler 的 subtitle 優先，否則取 config.collection[item]['subtitle']
-    subtitle_from_crawler = (raw.get("crawlerdic") or {}).get("subtitle")
+    subtitle_from_crawler = raw.get("crawlerdic",{}).get("subtitle")
     if isinstance(subtitle_from_crawler, list) and subtitle_from_crawler:
         subtitle_allowed = [colname_dic.get(x, x) for x in subtitle_from_crawler]
     else:
