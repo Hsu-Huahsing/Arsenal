@@ -64,7 +64,7 @@ import pandas as pd
 from StevenTricks.file_utils import pickleio
 from StevenTricks.file_utils import PathWalk_df
 
-from StevenTricks.convert_utils import safe_replace, safe_numeric_convert, changetype_stringtodate
+from StevenTricks.convert_utils import safe_replace, safe_numeric_convert, stringtodate
 from StevenTricks.dict_utils import keyinstr
 from StevenTricks.internal_db import DBPkl
 
@@ -97,19 +97,6 @@ def _get_span_cfg(item: str, subitem: str) -> Optional[dict]:
     by_item = (fields_span.get(item, {}) or {}).get(subitem)
     direct  = fields_span.get(subitem)
     return by_item or direct
-
-def _resolve_pk(df: pd.DataFrame) -> List[str]:
-    """
-    依欄位自動決定主鍵（供 db.tosql_df 使用）：
-      - 同時有「代號」與「date」→ ["代號","date"]
-      - 只有「date」         → ["date"]
-      - 其他                  → []
-    """
-    if "代號" in df.columns and "date" in df.columns:
-        return ["代號", "date"]
-    if "date" in df.columns:
-        return ["date"]
-    return []
 
 # ---- 自訂錯誤類，讓錯誤情境更清楚 ----
 class DataCleanError(RuntimeError):
@@ -151,33 +138,6 @@ def _normalize_cols(cols: List[str]) -> List[str]:
     mapped = [colname_dic.get(c, c) for c in cols]
     cleaned = [safe_replace(c, "</br>", "") for c in mapped]
     return cleaned
-
-
-def _to_date_key(s: Any) -> str:
-    """
-    將 crawler 的 'YYYYMMDD'、或 'YYYY-MM-DD' 轉為 'YYYY-MM-DD'。
-    若無法解析，丟 DataCleanError（立刻停）。
-    """
-    # 盡量寬鬆接受：純數字8碼 / 有連字號
-    if isinstance(s, (int, float)) and not pd.isna(s):
-        s = str(int(s))
-    if isinstance(s, str):
-        t = s.strip()
-        if len(t) == 8 and t.isdigit():
-            # YYYYMMDD
-            key = f"{t[0:4]}-{t[4:6]}-{t[6:8]}"
-        else:
-            # 交給 pandas
-            ts = pd.to_datetime(t, errors="coerce")
-            if pd.isna(ts):
-                raise DataCleanError("無法解析日期字串", value=s, value_type=type(s).__name__)
-            key = ts.strftime("%Y-%m-%d")
-        return key
-    # 其它型別也交給 pandas
-    ts = pd.to_datetime(s, errors="coerce")
-    if pd.isna(ts):
-        raise DataCleanError("無法解析日期（非字串型）", value=s, value_type=type(s).__name__)
-    return ts.strftime("%Y-%m-%d")
 
 
 def _list_source_pickles(root: str) -> pd.DataFrame:
@@ -354,7 +314,7 @@ def finalize_dataframe(
     # 4) 日期欄位轉換（若有指定 datecol）
     date_cfg = (datecol.get(item) or {}).get(subitem) or []
     try:
-        df = changetype_stringtodate(df,datecol=date_cfg, mode=3)  # 你專案原本使用 mode=3（常見 ROC/多格式）
+        df = stringtodate(df,datecol=date_cfg, mode=3)  # 你專案原本使用 mode=3（常見 ROC/多格式）
     except Exception as e:
         # 報出第一個壞值、型別
         bad = df
@@ -374,29 +334,10 @@ def finalize_dataframe(
     df = df[front + rest]
     return df
 
-
-# ---- 單一資料框清理（方便單測） ----
-def clean_one_dataframe(
-    df_raw: pd.DataFrame,
-    *,
-    item: str,
-    subitem: str,
-    date: str | pd.Timestamp,
-) -> pd.DataFrame:
-    """
-    對一個原始 DataFrame 進行最終規範化（不含 frameup/group 拆解步驟）
-    - 適合你在 Notebook/REPL 針對某子表做單獨除錯
-    """
-    date_key = _to_date_key(date)
-    df_raw = df_raw.copy()
-    df_raw.columns = _normalize_cols(list(df_raw.columns))
-    return finalize_dataframe(df_raw, item=item, subitem=subitem, date_key=date_key)
-
-
 # ---- 寫入資料庫 ----
 def _db_path_for_item(item: str) -> str:
     _ensure_dir(dbpath_cleaned)
-    return join(dbpath_cleaned, f"{item}.db")
+    return join(dbpath_cleaned, f"{item}")
 
 
 def _write_to_db(df: pd.DataFrame, convert_mode="upcast", *, item: str, subitem: str) -> None:
@@ -477,8 +418,8 @@ def _process_one_file(file_path: str) -> Tuple[str, str, str]:
 
     # 取 crawler 取得日
     try:
-        date_raw = (((raw.get("crawlerdic") or {}).get("payload") or {}).get("date"))
-        date_key = _to_date_key(date_raw)
+        date_raw = raw.get("crawlerdic").get("payload").get("date")
+        date_key = stringtodate(date_raw,mode=3)
     except Exception as e:
         raise DataCleanError("無法取得 crawler 日期", file=file_name, item=parentdir, value=raw.get("crawlerdic")) from e
 
@@ -643,3 +584,5 @@ for i, d in enumerate(lst, 1):
 
 
 raw = pickleio(path=r"/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock/twse/source/每日收盤行情/每日收盤行情_2023-09-25.pkl", mode="load")
+raw1 = pickleio(path=r"/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock/twse/cleaned/每日收盤行情/每日收盤行情.pkl", mode="load")
+raw2 = pickleio(path=r"/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock/twse/cleaned/每日收盤行情/每日收盤行情_schema.pkl", mode="load")
