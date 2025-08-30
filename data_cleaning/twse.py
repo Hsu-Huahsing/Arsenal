@@ -642,4 +642,4 @@ for i, d in enumerate(lst, 1):
 
 
 
-raw = pickleio(path=r"/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock/twse/source/每日收盤行情/每日收盤行情_2019-03-04.pkl", mode="load")
+raw = pickleio(path=r"/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock/twse/source/每日收盤行情/每日收盤行情_2023-09-25.pkl", mode="load")
