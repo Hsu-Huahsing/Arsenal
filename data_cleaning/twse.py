@@ -311,10 +311,14 @@ def finalize_dataframe(
     num_cfg = numericol.get(item,{}).get(subitem,{})
     df = safe_numeric_convert(df, num_cfg)
 
-    # 4) 日期欄位轉換（若有指定 datecol）
-    date_cfg = datecol.get(item,{}).get(subitem,{})
+    # 4) 若沒有任何日期欄，補一個統一 'date'
+    if "date" not in df.columns:
+        df.insert(0, "date", date_key)
+
+    # 5) 日期欄位轉換（若有指定 datecol）
+    date_cfg = datecol.get(item,{}).get(subitem,["date"])
     try:
-        df = stringtodate(df,datecol=date_cfg, mode=3)  # 你專案原本使用 mode=3（常見 ROC/多格式）
+        df = stringtodate(df, datecol=date_cfg, mode=4)
     except Exception as e:
         # 報出第一個壞值、型別
         bad = df
@@ -325,11 +329,9 @@ def finalize_dataframe(
             hint="請補充 changetype_stringtodate 規則或前置清理邏輯",
         ) from e
 
-    # 5) 若沒有任何日期欄，補一個統一 'date'
-    if "date" not in df.columns:
-        df.insert(0, "date", pd.to_datetime(date_key, format="%Y-%m-%d"))
+
     # 6) 欄位順序微整：把常見鍵放前面
-    front = [c for c in ["date", "代號"] if c in df.columns]
+    front = [c for c in ["date", "代號","名稱"] if c in df.columns]
     rest = [c for c in df.columns if c not in front]
     df = df[front + rest]
     return df
@@ -582,6 +584,6 @@ for i, d in enumerate(lst, 1):
 
 
 
-raw = pickleio(path=r"/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock/twse/source/每日收盤行情/每日收盤行情_2023-09-25.pkl", mode="load")
-raw1 = pickleio(path=r"/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock/twse/cleaned/每日收盤行情/每日收盤行情.pkl", mode="load")
-raw2 = pickleio(path=r"/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock/twse/cleaned/每日收盤行情/每日收盤行情_schema.pkl", mode="load")
+raw = pickleio(path=r"/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock/twse/source/三大法人買賣超日報/三大法人買賣超日報_2023-09-25.pkl", mode="load")
+raw1 = pickleio(path=r"/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock/twse/cleaned/三大法人買賣超日報/三大法人買賣超日報.pkl", mode="load")
+raw2 = pickleio(path=r"/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock/twse/cleaned/三大法人買賣超日報/三大法人買賣超日報_schema.pkl", mode="load")
