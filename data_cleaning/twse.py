@@ -73,6 +73,8 @@ from config.col_rename import colname_dic, transtonew_col
 from config.col_format import numericol, datecol
 from config.paths import dbpath_source, dbpath_cleaned, dbpath_cleaned_log  # 原始 pkl 的根目錄（crawler 產物 清洗後 SQLite 目錄 清洗完成 log（pickle）
 
+DEBUG_LAST_DF: Optional[pd.DataFrame] = None
+DEBUG_LAST_CONTEXT: Dict[str, Any] = {}
 
 # ---- Logging：預設 DEBUG ----
 _root = logging.getLogger()
@@ -402,26 +404,59 @@ def _write_to_db(df: pd.DataFrame, convert_mode="upcast", *, item: str, subitem:
     預設 PK 規則：
       - 同時有 '代號' 與 'date' → ['代號','date']
       - 僅有 'date' → ['date']
-      - 否則不設 PK（由 tosql_df 處理）
+      - 否則不設 PK（交由 DBPkl 處理）
     """
     pk: List[str] = []
     if "代號" in df.columns and "date" in df.columns:
         pk = ["代號", "date"]
+    elif "名稱" in df.columns and "date" in df.columns:
+        pk = ["名稱", "date"]
     elif "date" in df.columns:
         pk = ["date"]
+
     db_path = _db_path_for_item(item)
     logger.debug(f"寫入 DB：{db_path} 表={subitem} PK={pk}")
 
     dbi = DBPkl(db_path, subitem)
+
     try:
-        dbi.write_db(df,convert_mode=convert_mode, primary_key=(pk if pk else None))
+        # 若你的 DBPkl.write_db 支援 convert_mode 參數就保留；否則移除
+        dbi.write_db(df, convert_mode=convert_mode, primary_key=(pk if pk else None))
     except Exception as e:
-        # 若 DBPkl 暴露 schema_conflict，順手打在 debug 便於你定位
-        conflict = getattr(dbi, "schema_conflict", None)
+        # === 把當前狀態丟到全域，方便 PyCharm 變數窗格檢視 ===
+        global DEBUG_LAST_DF, DEBUG_LAST_CONTEXT
+        DEBUG_LAST_DF = df  # 不做 copy，保留原物件，利於完整檢視
+        conflict = getattr(dbi, "schema_conflict", None)  # 可能不存在
+
+        # 盡量提供足夠的診斷資訊
+        try:
+            dtypes = df.dtypes.astype(str).to_dict()
+        except Exception:
+            dtypes = {}
+
+        DEBUG_LAST_CONTEXT = {
+            "item": item,
+            "subitem": subitem,
+            "db_path": str(db_path),
+            "pk": pk,
+            "convert_mode": convert_mode,
+            "conflict": conflict,
+            "exception_type": type(e).__name__,
+            "exception_str": str(e),
+            "columns": list(df.columns),
+            "shape": tuple(df.shape),
+            # 請小心 head/unique 可能很大；如資料量很大可移除這兩行
+            "head": df.head(5),
+            "dtypes": dtypes,
+        }
+
+        # 額外在 log 打印一下衝突（若有）
         if conflict:
             logger.debug(f"[DB schema conflict] {conflict}")
-        # 嚴格策略：遇錯就停
+
+        # === 照你的策略：遇錯就停 ===
         raise
+
 
 
 # ---- 清洗一個檔案（主流程子步驟） ----
@@ -511,7 +546,7 @@ def _process_one_file(file_path: str) -> Tuple[str, str, str]:
         # 寫入 DB（每個子表一張表）
         _write_to_db(df1, item=parentdir, subitem=subitem)
 
-    return (date_key, parentdir, file_name)
+    return date_key, parentdir, file_name
 
 
 # ---- 清洗流程（可被 import 呼叫） ----
@@ -607,4 +642,4 @@ for i, d in enumerate(lst, 1):
 
 
 
-raw = pickleio(path=r"/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock/twse/source/三大法人買賣超日報/三大法人買賣超日報_2020-08-18.pkl", mode="load")
+raw = pickleio(path=r"/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock/twse/source/每日收盤行情/每日收盤行情_2019-03-04.pkl", mode="load")
