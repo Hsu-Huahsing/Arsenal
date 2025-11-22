@@ -1,63 +1,113 @@
-from config.conf import dbpath_cleaned,numericol
-from StevenTricks.internal_db import readsql_iter
+from config.paths import dbpath_cleaned
+from config.col_format import numericol
+from StevenTricks.internal_db import DBPkl
+
 from StevenTricks.convert_utils import safe_numeric_convert
 from StevenTricks.df_utils import make_series
 import pandas as pd
+from typing import Sequence, Optional, Tuple
 
 
-def diff_previous(df: pd.DataFrame, sort_col : ["代號","date"], item: str,subitem:str,percent=True):
-    # 這是和前一天的資料去做相減看變化，所以一定要有date，如果資料沒有date，這個函式就沒有意義
-    # 會返回一個有詳細計算步驟的temp，可以取代原本的df
+def diff_previous(
+    df: pd.DataFrame,
+    sort_cols: Sequence[str] = ("代號", "date"),
+    item: str = "",
+    subitem: str = "",
+    percent: bool = True,
+) -> pd.DataFrame:
+    """
+    對同一「代號」的時間序列，計算「當日 - 前一日」的差值與百分比變化。
+
+    參數：
+        df          : 原始資料表，至少需要包含 sort_cols 以及用來分組的「代號」欄位。
+        sort_cols   : 用來排序的欄位，預設為 ("代號", "date")，會用 descending 排序，
+                      讓前一筆資料剛好是「上一個日期」。
+        item        : numericol 設定中的第一層 key。
+        subitem     : numericol 設定中的第二層 key。
+        percent     : 若為 True，會另外計算 diff_percent_{col} = diff_{col} / previous_{col}。
+
+    回傳：
+        一份新的 DataFrame，包含：
+            - 原始欄位
+            - previous_{col}：前一日數值
+            - diff_{col}    ：當日與前一日差值
+            - diff_percent_{col}（若 percent=True）
+    """
+    if not isinstance(df, pd.DataFrame):
+        raise TypeError("df 必須是 pandas.DataFrame")
+
     temp = df.copy()
-    temp = temp.sort_values(by=sort_col, ascending=False)
-    # 自動去抓數值類型的欄位，把這個項目底下數值的欄位全部去跟前一天相減，有新增欄位也要去cond.py新增
+
+    # 依 sort_cols 做排序（通常是 代號 + 日期 由新到舊）
+    temp = temp.sort_values(by=list(sort_cols), ascending=False)
+
+    # 依 numericol[item][subitem] 取得需要計算差異的欄位
     value_col = numericol[item][subitem]
-    print(value_col)
-    value_col = [_ for _ in value_col if _ in temp]
-    print(temp.columns)
-    print(value_col)
+    # 過濾掉現在 df 中沒有的欄位，避免 KeyError
+    value_col = [c for c in value_col if c in temp.columns]
+
+    # 將目標欄位轉成數值型態（內部會處理錯誤值）
     temp = safe_numeric_convert(temp, value_col)
-    # 對 value_col 欄位，根據 "代號" 分組後做 shift
+
+    # 對每一個數值欄位，根據「代號」分組後做 shift(-1)，取得「前一日」資料
     for col in value_col:
-        temp[f"previous_{col}"] = temp.groupby("代號")[col].shift(-1)
-        temp[f'diff_{col}'] = temp[col] - temp[f"previous_{col}"]
-        if percent is True:
-            temp[f'diff_percent_{col}'] = temp[f'diff_{col}'] / temp[f'previous_{col}']
+        prev_col = f"previous_{col}"
+        diff_col = f"diff_{col}"
+        pct_col = f"diff_percent_{col}"
+
+        temp[prev_col] = temp.groupby("代號")[col].shift(-1)
+        temp[diff_col] = temp[col] - temp[prev_col]
+
+        if percent:
+            # 避免 division by zero 或 NaN，分母為 0 或 NaN 時結果設為 NaN
+            temp[pct_col] = temp[diff_col] / temp[prev_col].replace({0: pd.NA})
 
     return temp
 
+
 def cumulative_tracker(
-        series,
-        start_date,
-        threshold=None,
-        end_date=None,
-        direction="forward"
-):
+    series: pd.Series,
+    start_date,
+    threshold: Optional[float] = None,
+    end_date=None,
+    direction: str = "forward",
+) -> Tuple[Optional[pd.Timestamp], float, str]:
     """
-    在時間序列中從指定日期累積值，直到達到指定門檻或到達終止日期為止。
+    在時間序列中，從指定 start_date 開始累積 series 的值，
+    直到達到指定 threshold 或到達 end_date 為止。
 
-    Parameters:
-        series (pd.Series): 日期為 index，值為數值。
-        start_date (str or datetime): 起始時間點。
-        threshold (float or None): 累積的數值門檻。
-        end_date (str or datetime or None): 最後允許的日期。
-        direction (str): 累積方向，可選 "forward" 或 "backward"。
+    參數：
+        series    : index 為日期的數值序列。
+        start_date: 起始日期（str 或 datetime）。
+        threshold : 累積目標門檻，若為 None 則必須提供 end_date。
+        end_date  : 結束日期上限（含），若為 None 則由資料自然結束。
+        direction : 'forward' 代表往時間向後累積；
+                    'backward' 代表從 start_date 往前累積。
 
-    Returns:
-        tuple: (pd.Timestamp, 累積值, 停止原因)
-            停止原因為 'threshold'（門檻達成）、
-                          'end_date'（時間到）、
-                          'exhausted'（資料用完）
+    回傳：
+        (停止時的日期, 累積值, 停止原因)
+        停止原因為：
+            - 'threshold'：累積值達到門檻
+            - 'end_date'：到達 end_date（但未達門檻）
+            - 'exhausted'：資料用盡
     """
     if threshold is None and end_date is None:
-        raise ValueError("Either 'threshold' or 'end_date' must be provided to avoid infinite loop.")
+        raise ValueError("必須提供 threshold 或 end_date 其中之一，以避免無窮迴圈。")
+
+    if not isinstance(series, pd.Series):
+        raise TypeError("series 必須是 pandas.Series")
+
+    # 嘗試將 index 視為日期
+    if not isinstance(series.index, pd.DatetimeIndex):
+        series = series.copy()
+        series.index = pd.to_datetime(series.index)
 
     if isinstance(start_date, str):
         start_date = pd.to_datetime(start_date)
-    if isinstance(end_date, str):
+    if end_date is not None and isinstance(end_date, str):
         end_date = pd.to_datetime(end_date)
 
-    # 排序 & 篩選方向
+    # 依方向取出合適區間並排序
     if direction == "forward":
         data = series[series.index >= start_date].sort_index()
         if end_date is not None:
@@ -67,76 +117,141 @@ def cumulative_tracker(
         if end_date is not None:
             data = data[data.index >= end_date]
     else:
-        raise ValueError("direction must be 'forward' or 'backward'")
+        raise ValueError("direction 必須是 'forward' 或 'backward'。")
 
-    cumulative = 0
+    cumulative = 0.0
     for date, value in data.items():
-        cumulative += value
+        # 跳過 NaN
+        if pd.isna(value):
+            continue
+        cumulative += float(value)
         if threshold is not None and cumulative >= threshold:
-            return date, cumulative, 'threshold'
+            return date, cumulative, "threshold"
 
-    # 沒達到門檻，資料走完
+    # 沒有達到門檻，資料用完或被 end_date 截斷
     if not data.empty:
-        return data.index[-1], cumulative, 'end_date' if end_date else 'exhausted'
+        if end_date is not None:
+            return data.index[-1], cumulative, "end_date"
+        else:
+            return data.index[-1], cumulative, "exhausted"
     else:
-        return None, 0, 'exhausted'
+        return None, 0.0, "exhausted"
+
 
 class CumulativeMatcher:
-    def __init__(self, series):
-        self.series = series.sort_index()
-        self.reference_start = None
-        self.reference_end = None
-        self.reference_sum = None
+    """
+    輔助類別：
+    1. 先用 set_reference() 設定一段「參考期間」，並計算該期間的累積值。
+    2. 再用 find_matching_period()，從新的起點開始尋找「累積值相同」的期間。
+    """
+    def __init__(self, series: pd.Series):
+        if not isinstance(series, pd.Series):
+            raise TypeError("series 必須是 pandas.Series")
+        if not isinstance(series.index, pd.DatetimeIndex):
+            s = series.copy()
+            s.index = pd.to_datetime(s.index)
+            self.series = s.sort_index()
+        else:
+            self.series = series.sort_index()
 
-    def set_reference(self, start_date, end_date):
+        self.reference_start: Optional[pd.Timestamp] = None
+        self.reference_end: Optional[pd.Timestamp] = None
+        self.reference_sum: Optional[float] = None
+
+    def set_reference(self, start_date, end_date) -> None:
         """
-        設定參考區間，透過 cumulative_tracker 累積 reference sum。
+        設定一段參考區間，並計算該期間的累積值(reference_sum)。
         """
         start = pd.to_datetime(start_date)
         end = pd.to_datetime(end_date)
-        date, cum_sum, _ = cumulative_tracker(
-            start_date=start,
-            end_date=end,
-            direction="forward"
-        )
+
+        # 只取參考區間內的資料
+        ref_series = self.series[(self.series.index >= start) & (self.series.index <= end)]
+
+        if ref_series.empty:
+            raise ValueError("參考區間內沒有任何資料。")
+
+        # 累積總和
+        cum_sum = float(ref_series.sum())
+
         self.reference_start = start
         self.reference_end = end
         self.reference_sum = cum_sum
 
-    def find_matching_period(self, start_date=None, direction="forward", threshold=None, end_date=None):
+    def find_matching_period(
+        self,
+        start_date=None,
+        direction: str = "forward",
+        threshold: Optional[float] = None,
+        end_date=None,
+    ):
         """
-        根據參考值或指定門檻，在給定起點後尋找相同累積值的區段。
+        以之前 set_reference() 算出的 reference_sum 當作門檻，或自行指定 threshold，
+        從 start_date 開始往前或往後累積，尋找累積值達到同一門檻的日期。
 
-        Parameters:
-            start_date (str or datetime): 搜尋起始點（預設為 reference_end）
-            direction (str): "forward" 或 "backward"
-            threshold (float or None): 要匹配的累積門檻，預設為 reference_sum
-            end_date (str or datetime or None): 限制搜尋的最遠時間
-
-        Returns:
-            tuple: (pd.Timestamp, 累積值, 終止原因)
+        回傳與 cumulative_tracker 相同：
+            (停止日期, 累積值, 停止原因)
         """
+        # 若沒指定 threshold，就用參考區間的累積值
         if threshold is None:
             if self.reference_sum is None:
-                raise ValueError("No reference threshold defined.")
+                raise ValueError("尚未設定參考區間，請先呼叫 set_reference()。")
             threshold = self.reference_sum
 
+        # 若沒提供 start_date，就以參考區間的結束日期為起點
         if start_date is None:
             if self.reference_end is None:
-                raise ValueError("Must provide start_date or set reference first.")
+                raise ValueError("必須提供 start_date 或先呼叫 set_reference()。")
             start_date = self.reference_end
 
         return cumulative_tracker(
+            self.series,
             start_date=start_date,
             threshold=threshold,
             end_date=end_date,
-            direction=direction
+            direction=direction,
         )
 
-if __name__ == "__main__":
-    table1 = readsql_iter(dbpath=dbpath_cleaned,db_list=["外資及陸資投資持股統計.db"])
-    table1 = next(table1)
-    table2 = diff_previous(table1, ["代號", "date"], item="外資及陸資投資持股統計", subitem="外資及陸資投資持股統計")
-    date_col = make_series(table2, "diff_全體外資及陸資持有股數")
-    cumulative_tracker(date_col,"2023-1-1",)
 
+if __name__ == "__main__":
+    # Demo 範例：實務上會由其他模組呼叫，而不是直接執行本檔
+
+    # 1. 決定這個「DB 資料夾」的位置
+    db_name = dbpath_cleaned / "三大法人買賣超日報"  # 注意：這裡已經不是 .db 檔，而是資料夾
+
+    # 2. 這個 DB 底下的一張表（Arsenal twse 寫入時用的 subitem 名稱）
+    table_name = "三大法人買賣超日報"  # 看 config.conf 裡的 subtitle，跟 cleaning 時用的 subitem 一致
+
+    # 3. 建立 DBPkl 物件
+    db = DBPkl(str(db_name), table_name)
+
+    # 4. 讀取資料
+    df = db.load_db(decode_links=True)  # decode_links=True：把 link_id 還原成原本的字串分類
+    # df_raw = db.load_db(decode_links=False)  # 保留整數 ID，比較適合做純運算
+
+    # 把 date 欄位從 object → datetime64[ns]，並同步更新 schema
+    db.migrate_column_dtype("date", "datetime64[ns]")
+
+
+    raw_df = db.load_raw()
+    schema = db.load_schema()
+
+    mismatches = []
+    for col, expected in schema.get("dtypes", {}).items():
+        if col not in raw_df.columns:
+            print(f"[WARN] schema 有欄位 {col}，但 df 裡沒有，先略過")
+            continue
+        actual = str(raw_df[col].dtype)
+        if actual != expected:
+            mismatches.append((col, expected, actual))
+
+    print("=== dtype 不一致欄位列表 ===")
+    for col, expected, actual in mismatches:
+        print(f"{col}: schema={expected}, df={actual}")
+
+
+    for col, expected, actual in mismatches:
+        # 只處理 schema=int, df=float 的 case
+        if expected.startswith("int") and actual.startswith("float"):
+            print(f"[MIGRATE] {col}: {expected} -> {actual}")
+            db.migrate_column_dtype(col, actual)

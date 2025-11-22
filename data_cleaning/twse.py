@@ -438,11 +438,31 @@ def _process_one_file(file_path: str) -> Tuple[str, str, str]:
             f"file={file_name}, item={parentdir}. "
             f"請檢查 crawlerdic.subtitle 或 config.collection['{parentdir}']['subtitle']"
         )
-
     # 取所有子表（title, fields, data）
     sub_tables = key_extract(raw)
+
+    # 如果完全抓不到子表，先判斷是「沒資料日」還是「格式異常」
     if not sub_tables:
-        raise DataCleanError("未找到任何可清理的子表", file=file_name, item=parentdir)
+        stat_msg = raw.get("stat") or raw.get("note") or ""
+
+        # 典型情況：TWSE 回傳「很抱歉，沒有符合條件的資料!」或類似字眼
+        if isinstance(stat_msg, str) and (
+            "沒有符合條件的資料" in stat_msg or
+            "查無資料" in stat_msg
+        ):
+            logger.warning(
+                f"略過檔案（該日無資料）：file={file_name}, item={parentdir}, stat={stat_msg!r}"
+            )
+            # 這邊直接當作「空資料日」，讓流程繼續跑其他檔案
+            return date_key, parentdir, file_name
+
+        # 其他情況 → 真的找不到資料表，維持原本嚴格錯誤策略
+        raise DataCleanError(
+            "未找到任何可清理的子表",
+            file=file_name,
+            item=parentdir,
+            value=list(raw.keys()),  # 多給你 raw 的 key 幫助之後 debug
+        )
 
     for idx, d in enumerate(sub_tables, 1):
         title = d.get("title")
