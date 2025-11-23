@@ -603,7 +603,14 @@ def _write_to_db(
                 len(df_chunk),
             )
 
-            dbi = DBPkl(db_path, table_name)
+            # ★ data 檔名用 table_name（會帶 __2012 等），
+            #   schema 一律用 logical_table_name=subitem
+            dbi = DBPkl(
+                db_path,
+                table_name,
+                logical_table_name=subitem,
+            )
+
 
             try:
                 dbi.write_partition(
@@ -643,8 +650,10 @@ def _write_to_db(
         # 分桶模式下，這個函式到這裡就結束，不再走下面的「單一表」邏輯
         return
 
+
     # ---- ★ 否則維持原本單一表行為 ----
-    dbi = DBPkl(db_path, subitem)
+    dbi = DBPkl(db_path, subitem, logical_table_name=subitem)
+
 
     try:
         if partition_by_date:
@@ -663,7 +672,7 @@ def _write_to_db(
 
     except Exception as e:
         # 原本 debug 區塊原封不動
-        global DEBUG_LAST_DF, DEBUG_LAST_CONTEXT
+
         DEBUG_LAST_DF = df
         conflict = getattr(dbi, "schema_conflict", None)
         try:
