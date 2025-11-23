@@ -74,6 +74,8 @@ from config.col_rename import colname_dic, transtonew_col
 from config.col_format import numericol, datecol
 from config.paths import (
     dbpath_source,
+    dbpath_cleaned,
+    dbpath_cleaned_log,
     db_local_root,
 )
 from StevenTricks.staging import staging_path
@@ -876,15 +878,6 @@ def _process_twse_data_impl(
         )
 
     return processed
-
-
-
-
-
-# 前面 import 已經補好了：
-# from config.paths import dbpath_source, dbpath_cleaned, dbpath_cleaned_log, db_local_root
-# from StevenTricks.staging import staging_path
-
 
 def process_twse_data(
         cols: Optional[List[str]] = None,
