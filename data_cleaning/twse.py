@@ -163,6 +163,36 @@ def _is_partition_by_date_item(item: str) -> bool:
 
     return False
 
+def _make_bucket_key(date_series: pd.Series, mode: str) -> pd.Series:
+    """
+    把 date 欄位轉成「bucket key」，依 mode 回傳字串 Series：
+      - all     → 全部同一 bucket（不應進來，呼叫端會先略過）
+      - year    → '2020'
+      - quarter → '2020Q1'
+      - month   → '2020-01'
+      - day     → '2020-01-31'
+    """
+    mode = (mode or "all").lower()
+
+    if not pd.api.types.is_datetime64_any_dtype(date_series):
+        # 防呆：如果不是 datetime，就硬轉一次
+        date_series = pd.to_datetime(date_series)
+
+    if mode == "year":
+        return date_series.dt.strftime("%Y")
+
+    if mode == "quarter":
+        # to_period('Q') 會產生類似 '2020Q1'
+        return date_series.dt.to_period("Q").astype(str)
+
+    if mode == "month":
+        return date_series.dt.strftime("%Y-%m")
+
+    if mode == "day":
+        return date_series.dt.strftime("%Y-%m-%d")
+
+    # 其他（含 all）呼叫端不應進來；這裡直接給同一個 key
+    return pd.Series(["ALL"] * len(date_series), index=date_series.index)
 
 # ---- 自訂錯誤類，讓錯誤情境更清楚 ----
 class DataCleanError(RuntimeError):
@@ -519,7 +549,14 @@ def _db_path_for_item(item: str) -> str:
     return join(dbpath_cleaned, f"{item}")
 
 
-def _write_to_db(df: pd.DataFrame, convert_mode="upcast", *, item: str, subitem: str) -> None:
+def _write_to_db(
+    df: pd.DataFrame,
+    convert_mode: str = "upcast",
+    *,
+    item: str,
+    subitem: str,
+    bucket_mode: str = "all",     # ★ 新增
+) -> None:
     """
     預設 PK 規則：
       - 同時有 '代號' 與 'date' → ['代號','date']
@@ -533,24 +570,84 @@ def _write_to_db(df: pd.DataFrame, convert_mode="upcast", *, item: str, subitem:
         pk = ["名稱", "date"]
     elif "date" in df.columns:
         pk = ["date"]
+
     db_path = _db_path_for_item(item)
 
-    # 先判斷這個 item 是否為「日頻率」：freq == 'D'
     partition_by_date = "date" in df.columns and _is_partition_by_date_item(item)
 
     logger.debug(
-        "寫入 DB：%s 表=%s PK=%s partition_by_date=%s",
+        "寫入 DB：%s 表=%s PK=%s partition_by_date=%s bucket_mode=%s",
         db_path,
         subitem,
         pk,
         partition_by_date,
+        bucket_mode,
     )
 
+    # ---- ★ 若是日頻率 + bucket_mode != all → 依 bucket 拆表 ----
+    if partition_by_date and bucket_mode.lower() != "all":
+        # 產生 bucket key（字串）
+        bucket_key = _make_bucket_key(df["date"], bucket_mode)
+
+        # 一個 bucket 對應一個實際 table，例如：
+        #   subitem='三大法人買賣超日報', bucket='2020-01'
+        #   → table_name='三大法人買賣超日報__2020-01'
+        for b, df_chunk in df.groupby(bucket_key):
+            table_name = f"{subitem}__{b}"
+
+            logger.debug(
+                "寫入分桶表：%s/%s（bucket=%s, rows=%d）",
+                db_path,
+                table_name,
+                b,
+                len(df_chunk),
+            )
+
+            dbi = DBPkl(db_path, table_name)
+
+            try:
+                dbi.write_partition(
+                    df_chunk,
+                    convert_mode=convert_mode,
+                    partition_cols=["date"],
+                    primary_key=(pk if pk else None),
+                )
+            except Exception as e:
+                # debug 區塊照舊，但注意用 table_name
+                global DEBUG_LAST_DF, DEBUG_LAST_CONTEXT
+                DEBUG_LAST_DF = df_chunk
+                conflict = getattr(dbi, "schema_conflict", None)
+                try:
+                    dtypes = df_chunk.dtypes.astype(str).to_dict()
+                except Exception:
+                    dtypes = {}
+
+                DEBUG_LAST_CONTEXT = {
+                    "item": item,
+                    "subitem": table_name,
+                    "db_path": str(db_path),
+                    "pk": pk,
+                    "convert_mode": convert_mode,
+                    "conflict": conflict,
+                    "exception_type": type(e).__name__,
+                    "exception_str": str(e),
+                    "columns": list(df_chunk.columns),
+                    "shape": tuple(df_chunk.shape),
+                    "head": df_chunk.head(5),
+                    "dtypes": dtypes,
+                }
+                if conflict:
+                    logger.debug(f"[DB schema conflict] {conflict}")
+                raise
+
+        # 分桶模式下，這個函式到這裡就結束，不再走下面的「單一表」邏輯
+        return
+
+    # ---- ★ 否則維持原本單一表行為 ----
     dbi = DBPkl(db_path, subitem)
 
     try:
         if partition_by_date:
-            # ★ 日報模式：依 date 做 partition 覆寫
             dbi.write_partition(
                 df,
                 convert_mode=convert_mode,
@@ -558,7 +655,6 @@ def _write_to_db(df: pd.DataFrame, convert_mode="upcast", *, item: str, subitem:
                 primary_key=(pk if pk else None),
             )
         else:
-            # ★ 其他模式：維持原本 write_db 行為（逐筆主鍵 merge）
             dbi.write_db(
                 df,
                 convert_mode=convert_mode,
@@ -566,11 +662,10 @@ def _write_to_db(df: pd.DataFrame, convert_mode="upcast", *, item: str, subitem:
             )
 
     except Exception as e:
-        # === 以下照你原本的 debug 設計不變 ===
+        # 原本 debug 區塊原封不動
         global DEBUG_LAST_DF, DEBUG_LAST_CONTEXT
         DEBUG_LAST_DF = df
         conflict = getattr(dbi, "schema_conflict", None)
-
         try:
             dtypes = df.dtypes.astype(str).to_dict()
         except Exception:
@@ -592,14 +687,17 @@ def _write_to_db(df: pd.DataFrame, convert_mode="upcast", *, item: str, subitem:
         }
         if conflict:
             logger.debug(f"[DB schema conflict] {conflict}")
-
-        # === 照你的策略：遇錯就停 ===
         raise
+        # === 照你的策略：遇錯就停 ===
 
 
 
 # ---- 清洗一個檔案（主流程子步驟） ----
-def _process_one_file(file_path: str) -> Tuple[str, str, str]:
+def _process_one_file(
+    file_path: str,
+    *,
+    bucket_mode: str = "all",   # ★ 新增
+) -> Tuple[str, str, str]:
     """
     清洗單一 .pkl 檔。
     回傳：(date_key, item, file_name)
@@ -702,16 +800,22 @@ def _process_one_file(file_path: str) -> Tuple[str, str, str]:
             ) from e
 
         # 寫入 DB（每個子表一張表）
-        _write_to_db(df1, item=parentdir, subitem=subitem)
-
+        _write_to_db(
+            df1,
+            item=parentdir,
+            subitem=subitem,
+            bucket_mode=bucket_mode,
+        )
     return date_key, parentdir, file_name
 
 
 # ---- 清洗流程（可被 import 呼叫） ----
+
 def _process_twse_data_impl(
-    cols: Optional[List[str]] = None,
-    max_files_per_run: Optional[int] = None,  # 每輪最多處理幾個「實際清理」的檔案
-) -> int:
+            cols: Optional[List[str]] = None,
+            max_files_per_run: Optional[int] = None,# 每輪最多處理幾個「實際清理」的檔案
+            bucket_mode: str = "all",  # ★ 新增
+    ) -> int:
     """
     真正執行清理邏輯的內部函式。
 
@@ -821,7 +925,10 @@ def _process_twse_data_impl(
 
         # 3-5) 實際執行清理
         try:
-            date_key, item, cleaned_file_name = _process_one_file(file_path)
+            date_key, item, cleaned_file_name = _process_one_file(
+                file_path,
+                bucket_mode=bucket_mode,
+            )
         except Exception as e:
             # 標記為 failed
             job_state = _upsert_job_state_row(
@@ -883,7 +990,8 @@ def process_twse_data(
         cols: Optional[List[str]] = None,
         *,
         use_local_db_staging: bool = False,
-        batch_size: Optional[int] = None,  # 新增：每輪要處理幾個檔案
+        batch_size: Optional[int] = None,   # 每輪要處理幾個檔案
+        bucket_mode: str = "all",           # ★ 新增：時間 bucket 模式
 ) -> None:
     """
     TWSE 清理主入口。
@@ -896,9 +1004,10 @@ def process_twse_data(
     """
     global dbpath_cleaned, dbpath_cleaned_log
     logger.info(
-        "process_twse_data 啟動：use_local_db_staging=%s, dbpath_cleaned(初始)=%s",
+        "process_twse_data 啟動：use_local_db_staging=%s, dbpath_cleaned(初始)=%s, bucket_mode=%s",
         use_local_db_staging,
         dbpath_cleaned,
+        bucket_mode,
     )
     # 先記住原始（iCloud）路徑
     orig_cleaned = dbpath_cleaned
@@ -906,9 +1015,12 @@ def process_twse_data(
 
     if not use_local_db_staging:
         # 保持原本行為：直接在 iCloud 上清理
-        _process_twse_data_impl(cols, max_files_per_run=batch_size)
+        _process_twse_data_impl(
+            cols,
+            max_files_per_run=batch_size,
+            bucket_mode=bucket_mode,
+        )
         return
-
     if batch_size is None:
         # 若沒指定 batch_size，等同一次清到底
         batch_size = 10000000  # 或很大的數字，代表「不分批」
@@ -934,6 +1046,7 @@ def process_twse_data(
                 processed = _process_twse_data_impl(
                     cols,
                     max_files_per_run=batch_size,
+                    bucket_mode=bucket_mode,
                 )
             finally:
                 dbpath_cleaned = orig_cleaned
@@ -968,7 +1081,12 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=None,
         help="每一輪 staging 要處理的最大檔案數（例如 500）",
     )
-
+    p.add_argument(
+        "--bucket-mode",
+        choices=["all", "year", "quarter", "month", "day"],
+        default="all",
+        help="日期分桶模式：all=整檔一個表、year=每年一表、quarter=每季一表、month=每月一表、day=每日一表",
+    )
     args, unknown = p.parse_known_args(argv)
     if unknown:
         logger.debug("忽略未識別參數：%s", unknown)
@@ -980,6 +1098,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         cols=args.col,
         use_local_db_staging=args.staging,
         batch_size=args.batch_size,
+        bucket_mode=args.bucket_mode,
     )
 
 
