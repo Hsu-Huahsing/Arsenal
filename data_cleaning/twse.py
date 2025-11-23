@@ -78,6 +78,18 @@ from config.paths import (
     dbpath_cleaned_log,
     db_local_root,
 )
+# ---- 雲端 / 本機 路徑快取 ----
+# 一開始載入時，config.paths 的 db_root 指向「雲端」，所以這三個就是雲端路徑
+CLOUD_DBPATH_SOURCE = dbpath_source
+CLOUD_DBPATH_CLEANED = dbpath_cleaned
+CLOUD_DBPATH_CLEANED_LOG = dbpath_cleaned_log
+
+# 本機根目錄（config.paths.path_dic["stock_twse_db"]["db_local"]）
+LOCAL_DB_ROOT = db_local_root
+LOCAL_DBPATH_SOURCE = LOCAL_DB_ROOT / "source"
+LOCAL_DBPATH_CLEANED = LOCAL_DB_ROOT / "cleaned"
+LOCAL_DBPATH_CLEANED_LOG = LOCAL_DBPATH_CLEANED / "log.pkl"
+
 from StevenTricks.staging import staging_path
 
 DEBUG_LAST_DF: Optional[pd.DataFrame] = None
@@ -996,79 +1008,149 @@ def _process_twse_data_impl(
     return processed
 
 def process_twse_data(
-        cols: Optional[List[str]] = None,
-        *,
-        use_local_db_staging: bool = False,
-        batch_size: Optional[int] = None,   # 每輪要處理幾個檔案
-        bucket_mode: str = "all",           # ★ 新增：時間 bucket 模式
+    cols: Optional[List[str]] = None,
+    *,
+    storage_mode: str = "cloud",     # "cloud" / "cloud_staging" / "local"
+    batch_size: Optional[int] = None,
+    bucket_mode: str = "all",
 ) -> None:
     """
     TWSE 清理主入口。
 
     cols:
         要清哪幾個 item（如 ["三大法人買賣超日報"]），None 則清全部。
-    use_local_db_staging:
-        True  → 先把 iCloud 的 cleaned 目錄 staging 到本機，清完再同步回去。
-        False → 直接對 iCloud 上的 cleaned 目錄讀寫（等同舊行為）。
+
+    storage_mode:
+        - "cloud"         : 直接用雲端 db_root（config.paths 的 db_root）
+        - "cloud_staging" : 雲端 + 本機暫存（先把 cleaned 整包拉到本機處理，再同步回雲端）
+        - "local"         : 完全只用本機 root（config.paths 的 db_local_root），不碰雲端
+
+    batch_size:
+        - 僅在 "cloud_staging" 模式有效，每一輪最多處理幾個檔案。
+          例如 500 表示每次 staging 只處理 500 個 source 檔，處理完同步回雲端，再下載下一批。
+          None 則視為「一次清到底」。
     """
-    global dbpath_cleaned, dbpath_cleaned_log
+    global dbpath_source, dbpath_cleaned, dbpath_cleaned_log
+
+    storage_mode = (storage_mode or "cloud").lower()
+    if storage_mode not in {"cloud", "cloud_staging", "local"}:
+        raise ValueError(f"storage_mode 必須是 'cloud' / 'cloud_staging' / 'local'，目前為：{storage_mode!r}")
+
     logger.info(
-        "process_twse_data 啟動：use_local_db_staging=%s, dbpath_cleaned(初始)=%s, bucket_mode=%s",
-        use_local_db_staging,
-        dbpath_cleaned,
+        "process_twse_data 啟動：storage_mode=%s, bucket_mode=%s, dbpath_source(初始)=%s, dbpath_cleaned(初始)=%s",
+        storage_mode,
         bucket_mode,
+        dbpath_source,
+        dbpath_cleaned,
     )
-    # 先記住原始（iCloud）路徑
+
+    # 先備份「目前」的 active 路徑（通常是雲端）
+    orig_source = dbpath_source
     orig_cleaned = dbpath_cleaned
     orig_cleaned_log = dbpath_cleaned_log
 
-    if not use_local_db_staging:
-        # 保持原本行為：直接在 iCloud 上清理
-        _process_twse_data_impl(
-            cols,
-            max_files_per_run=batch_size,
-            bucket_mode=bucket_mode,
+    # ---------- 情境 A：完全本機模式 ----------
+    if storage_mode == "local":
+        # 切換成「本機」路徑
+        dbpath_source = LOCAL_DBPATH_SOURCE
+        dbpath_cleaned = LOCAL_DBPATH_CLEANED
+        dbpath_cleaned_log = LOCAL_DBPATH_CLEANED_LOG
+
+        _ensure_dir(str(dbpath_source))
+        _ensure_dir(str(dbpath_cleaned))
+
+        logger.info(
+            "進入 LOCAL 模式：source=%s, cleaned=%s",
+            dbpath_source,
+            dbpath_cleaned,
         )
+
+        try:
+            _process_twse_data_impl(
+                cols,
+                bucket_mode=bucket_mode,
+                max_files_per_run=batch_size,
+            )
+        finally:
+            # 不管有沒有出錯，都把路徑還原
+            dbpath_source = orig_source
+            dbpath_cleaned = orig_cleaned
+            dbpath_cleaned_log = orig_cleaned_log
+
         return
+
+    # ---------- 情境 B / C：以雲端為主 ----------
+    # 先把 active 路徑切回「雲端版本」
+    dbpath_source = CLOUD_DBPATH_SOURCE
+    dbpath_cleaned = CLOUD_DBPATH_CLEANED
+    dbpath_cleaned_log = CLOUD_DBPATH_CLEANED_LOG
+
+    # B-1：純雲端（舊的「不用 staging」）
+    if storage_mode == "cloud":
+        logger.info(
+            "進入 CLOUD (no staging) 模式：source=%s, cleaned=%s",
+            dbpath_source,
+            dbpath_cleaned,
+        )
+        try:
+            _process_twse_data_impl(
+                cols,
+                bucket_mode=bucket_mode,
+                max_files_per_run=batch_size,
+            )
+        finally:
+            dbpath_source = orig_source
+            dbpath_cleaned = orig_cleaned
+            dbpath_cleaned_log = orig_cleaned_log
+        return
+
+    # B-2：雲端 + 本機 staging（你原本的 use_local_db_staging=True 模式）
+    # 等同以前的程式，但邏輯搬到這裡而且更明確
     if batch_size is None:
-        # 若沒指定 batch_size，等同一次清到底
-        batch_size = 10000000  # 或很大的數字，代表「不分批」
-    # ---- 以下：啟用 staging 模式 ----
-    # target_path：要被 staging 的就是「cleaned」這個資料夾
-    target_cleaned: Path = orig_cleaned
-    staging_root: Path = db_local_root  # config.paths 裡定義的本機根目錄
+        batch_size = 10_000_000  # 一次清到底
+
+    target_cleaned: Path = CLOUD_DBPATH_CLEANED
+    staging_root: Path = db_local_root
 
     batch_no = 0
     while True:
         batch_no += 1
         logger.info("===== 開始 staging batch %d，batch_size=%d =====", batch_no, batch_size)
 
-        # 每一輪都：
-        # 1) 從 iCloud 把 cleaned + job_state 等複製到本機 staging
-        # 2) 在本機對「目前尚未清理的檔案」處理最多 batch_size 個
-        # 3) 離開 with 時，由 staging_path 把結果寫回 iCloud，並清掉本機暫存
+        # staging_path 會：
+        # 1) 把「雲端 cleaned」整個複製到 staging_root 下某個 staging_xxx/cleaned 資料夾
+        # 2) yield 本機 cleaned 的路徑
+        # 3) 離開 with 時把本機結果同步回雲端，並把 staging_xxx 刪掉
         with staging_path(target_cleaned, enable=True, staging_root=staging_root) as local_cleaned:
             try:
                 dbpath_cleaned = local_cleaned
                 dbpath_cleaned_log = local_cleaned / "log.pkl"
 
+                logger.info(
+                    "cloud_staging 模式：本輪在本機 cleaned=%s 上處理",
+                    dbpath_cleaned,
+                )
+
                 processed = _process_twse_data_impl(
                     cols,
-                    max_files_per_run=batch_size,
                     bucket_mode=bucket_mode,
+                    max_files_per_run=batch_size,
                 )
             finally:
-                dbpath_cleaned = orig_cleaned
-                dbpath_cleaned_log = orig_cleaned_log
+                # 恢復成雲端 cleaned
+                dbpath_cleaned = CLOUD_DBPATH_CLEANED
+                dbpath_cleaned_log = CLOUD_DBPATH_CLEANED_LOG
 
         if processed == 0:
             logger.info("沒有待處理檔案，staging 迴圈結束。")
             break
 
-        logger.info("===== staging batch %d 完成，處理 %d 個檔案 =====", batch_no, processed)
-        # 迴圈會自動進入下一輪：
-        # 下次 with 時，會從「已更新的 iCloud cleaned + job_state」再複製一份到本機，
-        # 然後 _process_twse_data_impl() 會看到「pending 變少」，只處理下一批。
+        logger.info("===== staging batch %d 完成，本輪處理 %d 個檔案 =====", batch_no, processed)
+
+    # 最後保險再把 active 路徑恢復到原本狀態
+    dbpath_source = orig_source
+    dbpath_cleaned = orig_cleaned
+    dbpath_cleaned_log = orig_cleaned_log
 
 
 # ---- CLI ----
@@ -1080,10 +1162,13 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="指定要清理的類別（資料夾名/collection key），預設全清",
     )
     p.add_argument(
-        "--staging",
-        action="store_true",
-        help="啟用本機 DB staging 模式（先在本機處理 DB，完成後再同步回 iCloud）",
+        "--storage-mode",
+        type=str,
+        default="cloud",
+        choices=["cloud", "cloud_staging", "local"],
+        help="資料儲存模式：cloud=直接用雲端；cloud_staging=雲端+本機暫存；local=完全只用本機 db_local_root。",
     )
+
     p.add_argument(
         "--batch-size",
         type=int,
@@ -1105,7 +1190,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     args = _parse_args(argv)
     process_twse_data(
         cols=args.col,
-        use_local_db_staging=args.staging,
+        storage_mode=args.storage_mode,
         batch_size=args.batch_size,
         bucket_mode=args.bucket_mode,
     )
