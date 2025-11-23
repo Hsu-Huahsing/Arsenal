@@ -306,7 +306,15 @@ def _upsert_job_state_row(
             }
         )
         row.update(state)
-        job_state = pd.concat([job_state, pd.DataFrame([row])], ignore_index=True)
+
+        # ★ 這裡避免對「空 DataFrame」做 concat，防止 FutureWarning
+        if job_state.empty:
+            job_state = pd.DataFrame([row], columns=JOB_STATE_COLUMNS)
+        else:
+            job_state = pd.concat(
+                [job_state, pd.DataFrame([row])],
+                ignore_index=True,
+            )
     else:
         # 更新既有紀錄
         for k, v in state.items():
@@ -323,6 +331,7 @@ def _upsert_job_state_row(
             job_state.loc[idx, "item"] = item
 
     return job_state
+
 
 
 # ---- 解析 TWSE API 結構 → 子表 dict list ----
@@ -701,20 +710,12 @@ def _process_one_file(file_path: str) -> Tuple[str, str, str]:
 def _process_twse_data_impl(
     cols: Optional[List[str]] = None,
     max_files_per_run: Optional[int] = None,  # 每輪最多處理幾個檔案
-) -> int:
+) -> int:  # 回傳「本輪實際處理幾個檔案」
     """
     真正執行清理邏輯的內部函式。
 
-    行為說明：
-    1. 讀取 job_state（log.pkl），裡面有每個檔案的 status / hash / mtime。
-    2. 掃描 source 目錄，根據：
-       - 檔案是否存在 job_state
-       - status 是否為 success
-       - source 的 hash / mtime 是否有改變
-       判斷哪些檔案要「這一輪重跑 / 首次清理」。
-    3. 依照 max_files_per_run，只拿前 N 個「需要處理」的檔案做清理。
-    4. 每處理完一個檔案，就即時更新 job_state（status, hash, mtime, last_processed_at）。
-    5. 回傳本輪實際處理了幾個檔案。
+    注意：這裡假設 dbpath_cleaned / dbpath_cleaned_log 已經是「要寫入的那個路徑」
+          （可能是 iCloud，可能是本機 staging，由外層負責決定）。
     """
     _ensure_dir(dbpath_cleaned)
 
@@ -723,24 +724,50 @@ def _process_twse_data_impl(
 
     # 2) 列出所有 source pkl 檔
     files_df = _list_source_pickles(dbpath_source)
+
     if cols:
         files_df = files_df[files_df["dir"].isin(cols)].copy()
 
-    if files_df.empty:
+    total_files = len(files_df)
+    if total_files == 0:
         logger.info("找不到任何待處理的 source 檔案。")
         return 0
 
-    total_files = len(files_df)
     logger.info(f"待檢查檔案數：{total_files}")
 
-    # 3) 決定「這一輪要處理哪一些檔案」
-    candidate_rows: List[Tuple[str, str, str, Dict[str, Any]]] = []
-    skipped_unchanged = 0  # 完全 success 且 source 未變更的檔案數
+    processed = 0            # 本輪真的有跑 clean 的檔案數
+    skipped_unchanged = 0    # 完全沒變更而略過的檔案
+    scanned = 0              # 掃描到第幾筆 files_df（含略過）
 
-    for _, row in files_df.iterrows():
-        file_path = row["path"]
-        file_name = row["file"]
-        dir_name = row["dir"]
+    # 用 itertuples + enumerate，順便拿 index 當成進度
+    for row in files_df.itertuples(index=False):
+        scanned += 1
+
+        # 如果有 max_files_per_run，達到上限就先收工，讓 staging 外層開下一輪
+        if max_files_per_run is not None and processed >= max_files_per_run:
+            logger.info(
+                "已達本輪處理上限 %d，暫停，等待下一輪 staging（本輪實際處理 %d 檔，略過 %d 檔，掃描到第 %d / %d 檔）。",
+                max_files_per_run,
+                processed,
+                skipped_unchanged,
+                scanned,
+                total_files,
+            )
+            break
+
+        file_path = row.path
+        file_name = row.file
+        dir_name = row.dir
+
+        # 每隔一段時間輸出掃描進度（避免你以為他掛了）
+        if scanned % 1000 == 0:
+            logger.info(
+                "掃描進度：%d / %d（已實際處理 %d 檔，略過 %d 檔）。",
+                scanned,
+                total_files,
+                processed,
+                skipped_unchanged,
+            )
 
         # 3-1) 取得 source 當前狀態（size / mtime / hash）
         state_now = _calc_file_state(file_path)
@@ -750,13 +777,13 @@ def _process_twse_data_impl(
 
         # 3-2) 找出這個檔案在 job_state 的既有紀錄（若有）
         if job_state.empty:
+            rec_idx = pd.Series([], dtype=bool)
             rec = None
         else:
             rec_idx = (job_state["path"] == file_path)
             rec = job_state.loc[rec_idx].iloc[0] if rec_idx.any() else None
 
-        need_process = True  # 預設要處理
-
+        # 3-3) 判斷是否可以安全略過
         if rec is not None:
             rec_status = rec.get("status")
             rec_hash = rec.get("hash")
@@ -771,76 +798,41 @@ def _process_twse_data_impl(
                 and pd.Timestamp(rec_mtime) == mtime_now
             ):
                 skipped_unchanged += 1
-                need_process = False
-            else:
-                # 只要：
-                #  - 曾經 success 但 source 有改
-                #  - 或 status 是 pending / failed
-                # 就標記為 pending，準備重跑
-                job_state = _upsert_job_state_row(
-                    job_state,
-                    file=file_name,
-                    path=file_path,
-                    dir_name=dir_name,
-                    date_key=None,
-                    item=None,
-                    state={
-                        "status": "pending",
-                        "hash": fp_now,
-                        "source_mtime": mtime_now,
-                        "source_size": size_now,
-                    },
+                # 這裡用 DEBUG，不會洗爆 log，需要可以改成 INFO
+                logger.debug(f"略過檔案（source 未變更）：{file_name}")
+                continue
+
+            # status 是 success 但 mtime/hash 改變 → 啟動防呆，標記 pending 後重跑
+            if rec_status == "success" and (
+                rec_hash != fp_now
+                or (pd.notna(rec_mtime) and pd.Timestamp(rec_mtime) != mtime_now)
+            ):
+                logger.warning(
+                    "偵測到 source 在上次成功清理後有變更，標記為 pending：file=%s, old_mtime=%s, new_mtime=%s",
+                    file_name,
+                    rec_mtime,
+                    mtime_now,
                 )
-        else:
-            # 新檔案：無 job_state 紀錄 → 建立 pending
-            job_state = _upsert_job_state_row(
-                job_state,
-                file=file_name,
-                path=file_path,
-                dir_name=dir_name,
-                date_key=None,
-                item=None,
-                state={
-                    "status": "pending",
-                    "hash": fp_now,
-                    "source_mtime": mtime_now,
-                    "source_size": size_now,
-                },
-            )
+                job_state.loc[rec_idx, "status"] = "pending"
 
-        # 需要處理的檔案先丟到 candidate list，等一下再依 batch 切
-        if need_process:
-            candidate_rows.append((file_path, file_name, dir_name, state_now))
+        # 3-4) 進入清理流程前，先把狀態寫成 pending（無紀錄也會建一筆）
+        job_state = _upsert_job_state_row(
+            job_state,
+            file=file_name,
+            path=file_path,
+            dir_name=dir_name,
+            date_key=None,
+            item=None,
+            state={
+                "status": "pending",
+                "hash": fp_now,
+                "source_mtime": mtime_now,
+                "source_size": size_now,
+            },
+        )
+        _save_job_state(job_state)
 
-    # 先把「pending 標記更新」的 job_state 存一次（就算等一下還沒處理到）
-    _save_job_state(job_state)
-
-    if not candidate_rows:
-        logger.info("所有 source 檔案都已是最新狀態，無需清理。")
-        return 0
-
-    # 4) 依 max_files_per_run 切 batch
-    if max_files_per_run is not None:
-        candidate_rows = candidate_rows[: max_files_per_run]
-
-    total_to_process = len(candidate_rows)
-    logger.info(
-        "本輪將處理 %d 個檔案（總檔案數 %d，其中 %d 個已 success 且 source 未變更）。",
-        total_to_process,
-        total_files,
-        skipped_unchanged,
-    )
-
-    processed_count = 0
-
-    # 5) 實際執行清理
-    for idx, (file_path, file_name, dir_name, state_now) in enumerate(candidate_rows, start=1):
-        fp_now = state_now["hash"]
-        mtime_now = state_now["source_mtime"]
-        size_now = state_now["source_size"]
-
-        logger.info("本輪進度：%d/%d，處理檔案：%s", idx, total_to_process, file_name)
-
+        # 3-5) 實際執行清理
         try:
             date_key, item, cleaned_file_name = _process_one_file(file_path)
         except Exception as e:
@@ -862,10 +854,11 @@ def _process_twse_data_impl(
             )
             _save_job_state(job_state)
             logger.error(f"處理發生錯誤：{e}")
-            # 依你的策略：遇錯就整體中止（本輪到此為止）
+            # 照你的策略：遇錯就整體中止
             raise
 
-        # 清理成功 → 更新 job_state 為 success
+        # 3-6) 清理成功 → 更新 job_state 為 success
+        processed += 1
         job_state = _upsert_job_state_row(
             job_state,
             file=file_name,
@@ -883,10 +876,25 @@ def _process_twse_data_impl(
         )
         _save_job_state(job_state)
 
-        logger.info(f"完成：{cleaned_file_name}（date={date_key}, item={item}）")
-        processed_count += 1
+        logger.info(
+            "完成：%s（date=%s, item=%s）｜本輪已處理 %d 檔 / 總檔數 %d（掃描到第 %d 檔）。",
+            cleaned_file_name,
+            date_key,
+            item,
+            processed,
+            total_files,
+            scanned,
+        )
 
-    return processed_count
+    logger.info(
+        "本輪清理結束：實際處理 %d 檔，略過（未變更）%d 檔，總檔數 %d（本輪掃描到 %d 檔）。",
+        processed,
+        skipped_unchanged,
+        total_files,
+        scanned,
+    )
+    return processed
+
 
 
 
