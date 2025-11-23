@@ -41,7 +41,7 @@ dbpath_productlist: Path = dbpath_source / "productlist.pkl"
 cachepath: Path = cache_root
 cachepath_namelog: Path = cache_root / "namelog.pkl"
 
-# 給 views.industry_flow 用的 mapping
+# 給 app.industry_flow 用的 mapping
 cleaned_db_dict = {
     # DBPkl 的 root 資料夾，industry_flow 用 readsql_iter(dbpath=...) 讀
     "三大法人買賣超日報": dbpath_cleaned / "三大法人買賣超日報",

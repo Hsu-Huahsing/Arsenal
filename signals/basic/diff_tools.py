@@ -1,8 +1,10 @@
 from config.paths import dbpath_cleaned
 from config.col_format import numericol
 from StevenTricks.internal_db import DBPkl
-
 from StevenTricks.convert_utils import safe_numeric_convert
+
+from data_access.twse_db import TwseDB
+
 import pandas as pd
 from typing import Sequence
 
@@ -64,6 +66,19 @@ def diff_previous(
     return temp
 
 
+
+
+def diff_for_stock(
+    item: str,
+    subitem: str,
+    stock_id: str,
+    start=None,
+    end=None,
+    percent: bool = True,
+) -> pd.DataFrame:
+    db = TwseDB(item, subitem)
+    df = db.get_stock_df(stock_id, start=start, end=end)
+    return diff_previous(df, item=item, subitem=subitem, percent=percent)
 
 
 if __name__ == "__main__":
