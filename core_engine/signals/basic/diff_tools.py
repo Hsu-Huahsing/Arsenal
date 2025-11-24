@@ -3,7 +3,7 @@ from config.col_format import numericol
 from StevenTricks.internal_db import DBPkl
 from StevenTricks.convert_utils import safe_numeric_convert
 
-from data_access.twse_db import TwseDB
+from core_engine.data_access.twse_db import TwseDB
 
 import pandas as pd
 from typing import Sequence

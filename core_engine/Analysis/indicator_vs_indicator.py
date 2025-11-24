@@ -1,6 +1,6 @@
 import pandas as pd
 from typing import Sequence
-from signals.basic.signal_builder import build_signal_series
+from core_engine.signals.basic.signal_builder import build_signal_series
 
 def build_multi_indicator_signals(
     item: str,

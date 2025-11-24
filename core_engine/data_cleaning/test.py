@@ -1,4 +1,4 @@
-from data_cleaning.twse import process_twse_data
+from core_engine.data_cleaning.twse import process_twse_data
 
 process_twse_data(
     storage_mode="cloud_staging",

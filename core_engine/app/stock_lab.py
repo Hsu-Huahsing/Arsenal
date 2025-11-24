@@ -1,5 +1,5 @@
-from Analysis.stock_vs_stock import compare_two_stocks_signal
-from Analysis.indicator_vs_indicator import build_multi_indicator_signals
+from core_engine.Analysis.stock_vs_stock import compare_two_stocks_signal
+from core_engine.Analysis.indicator_vs_indicator import build_multi_indicator_signals
 
 def quick_stock_vs_stock(
     stock_a: str,

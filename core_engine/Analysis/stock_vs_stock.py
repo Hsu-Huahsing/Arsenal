@@ -1,6 +1,6 @@
 import pandas as pd
-from signals.basic.signal_builder import build_signal_series
-from signals.basic.cumulative_tools import cumulative_tracker
+from core_engine.signals.basic.signal_builder import build_signal_series
+from core_engine.signals.basic.cumulative_tools import cumulative_tracker
 
 def compare_two_stocks_signal(
     item: str,
