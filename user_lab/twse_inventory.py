@@ -1,4 +1,4 @@
-# Arsenal/warehouse/warehouse_manager.py
+# Arsenal/warehouse/twse_inventory.py
 
 from pathlib import Path
 import pandas as pd

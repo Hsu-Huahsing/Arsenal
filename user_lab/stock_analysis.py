@@ -1,21 +1,12 @@
-import sys
 from pathlib import Path
+import sys
 
-BASE = Path().resolve()  # 這就是現在這個 notebook 所在的資料夾
-print(BASE)              # 先印出來確認一下
+ROOT = Path(__file__).resolve().parent          # 這時 ROOT = Arsenal/ 或 Arsenal/user_lab/
+sys.path.append(str(ROOT))                      # Arsenal 在 sys.path 上
+# 如果 Arsenal 和 StevenTricks 同層：
+sys.path.append(str(ROOT.parent / "StevenTricks"))  # 選配，看你實際放哪
 
-sys.path.append(str(BASE / "Arsenal"))
-sys.path.append(str(BASE / "StevenTricks"))
-
-
-from user_lab.warehouse_manager import quick_inventory_summary
-
-def demo_inventory():
-    inv = quick_inventory_summary()
-    print(inv)
-
-
-from core_engine.app.stock_lab import quick_stock_vs_stock
+from core_engine.app.stock_lab import quick_stock_vs_stock, quick_indicators_for_stock
 
 
 
