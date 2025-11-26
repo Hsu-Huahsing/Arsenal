@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from datetime import date
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict, Any
 
 import pandas as pd
 
@@ -113,16 +113,15 @@ def merge_source_cleaned(today: Optional[date] = None) -> pd.DataFrame:
         "status": "cleaned_status",
     }
 
-    src2 = (
-        src[["item", "subitem"] + list(src_cols.keys())].rename(columns=src_cols)
-        if not src.empty
-        else pd.DataFrame(columns=["item", "subitem"] + list(src_cols.values()))
-    )
-    cln2 = (
-        cln[["item", "subitem"] + list(cln_cols.keys())].rename(columns=cln_cols)
-        if not cln.empty
-        else pd.DataFrame(columns=["item", "subitem"] + list(cln_cols.values()))
-    )
+    if not src.empty:
+        src2 = src[["item", "subitem"] + list(src_cols.keys())].rename(columns=src_cols)
+    else:
+        src2 = pd.DataFrame(columns=["item", "subitem"] + list(src_cols.values()))
+
+    if not cln.empty:
+        cln2 = cln[["item", "subitem"] + list(cln_cols.keys())].rename(columns=cln_cols)
+    else:
+        cln2 = pd.DataFrame(columns=["item", "subitem"] + list(cln_cols.values()))
 
     merged = pd.merge(
         src2,
@@ -209,10 +208,10 @@ def summarize_cleaned_by_item(today: Optional[date] = None) -> pd.DataFrame:
         max_days_lag=("days_lag", "max"),
     )
 
-    # 各狀態統計
+    # 各狀態的筆數
     status_counts = (
-        cln.groupby(["item", "status"])
-        .size()
+        cln.groupby(["item", "status"])["path"]
+        .count()
         .unstack(fill_value=0)
         .rename(
             columns={
@@ -222,6 +221,8 @@ def summarize_cleaned_by_item(today: Optional[date] = None) -> pd.DataFrame:
             }
         )
     )
+
+    # 確保三個欄位都存在
     for col in ["n_ok", "n_lagging", "n_stale"]:
         if col not in status_counts.columns:
             status_counts[col] = 0
@@ -267,7 +268,10 @@ def summarize_cleaning_log() -> pd.DataFrame:
             .size()
             .rename("count")
             .reset_index()
-            .sort_values(["item", "subitem", "status", "count"], ascending=[True, True, True, False])
+            .sort_values(
+                ["item", "subitem", "status", "count"],
+                ascending=[True, True, True, False],
+            )
         )
         return grouped
 
@@ -296,7 +300,7 @@ def load_error_log() -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# 5. 對外快速介面
+# 5. 對外快速介面（給 Notebook / 其他模組用）
 # ---------------------------------------------------------------------------
 
 def quick_inventory_summary(today: Optional[date] = None) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -318,17 +322,161 @@ def quick_inventory_summary(today: Optional[date] = None) -> Tuple[pd.DataFrame,
     return cleaned_detail, item_summary, relation_status
 
 
-if __name__ == "__main__":
-    # 簡單 CLI：直接執行時印出三張表的前幾列
-    cleaned_detail, item_summary, relation_status = quick_inventory_summary()
+def get_twse_status(
+    today: Optional[date] = None,
+    include_log: bool = True,
+    include_errorlog: bool = True,
+) -> Dict[str, Any]:
+    """
+    提供一個整合好的「倉庫現況」字典，方便其他前端（例如 user_lab 的 script）使用。
+    """
+    if today is None:
+        today = date.today()
+
+    cleaned_detail, item_summary, relation_status = quick_inventory_summary(today=today)
+    missing = find_missing_cleaned(today=today)
+    orphan = find_orphan_cleaned(today=today)
+
+    log_summary = summarize_cleaning_log() if include_log else pd.DataFrame()
+    error_log = load_error_log() if include_errorlog else pd.DataFrame()
+
+    return {
+        "today": today,
+        "cleaned_detail": cleaned_detail,
+        "item_summary": item_summary,
+        "relation_status": relation_status,
+        "missing": missing,
+        "orphan": orphan,
+        "log_summary": log_summary,
+        "error_log": error_log,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 6. 簡易 CLI 報表（取代舊的 warehouse_report）
+# ---------------------------------------------------------------------------
+
+def _format_title(text: str) -> str:
+    line = "=" * len(text)
+    return f"{line}\n{text}\n{line}"
+
+
+def run_report(
+    today: Optional[date] = None,
+    show_log: bool = True,
+    show_detail: bool = False,
+    max_rows: int = 30,
+) -> None:
+    """
+    在終端機輸出 TWSE 倉庫總覽報表。
+
+    參數
+    ----
+    today : date, optional
+        報表日期，預設為今天。
+    show_log : bool
+        是否顯示清理 log / error log 摘要。
+    show_detail : bool
+        是否加印 cleaned / relation 狀態的明細（只印前 max_rows 列）。
+    max_rows : int
+        明細最多顯示的列數。
+    """
+    status = get_twse_status(today=today, include_log=show_log, include_errorlog=show_log)
+    today = status["today"]
+    cleaned_detail = status["cleaned_detail"]
+    item_summary = status["item_summary"]
+    relation_status = status["relation_status"]
+    missing = status["missing"]
+    orphan = status["orphan"]
+    log_summary = status["log_summary"]
+    error_log = status["error_log"]
+
     pd.set_option("display.width", 180)
-    pd.set_option("display.max_columns", 20)
+    pd.set_option("display.max_columns", 30)
 
-    print("\n[Cleaned 檔案明細（前 20 列）]")
-    print(cleaned_detail.head(20))
+    print(_format_title(f"TWSE 倉庫總覽（截至 {today}）"))
 
-    print("\n[Cleaned 依 item 彙總]")
-    print(item_summary)
+    # 1. item 層級 summary
+    print("\n[1] Cleaned 依 item 彙總：")
+    if item_summary.empty:
+        print("  （尚無 cleaned 資料）")
+    else:
+        print(item_summary.to_string(index=False))
 
-    print("\n[Source vs Cleaned 對比（前 20 列）]")
-    print(relation_status.head(20))
+    # 2. source vs cleaned 缺漏
+    print("\n[2] Source vs Cleaned 缺漏檢查：")
+    if missing.empty and orphan.empty:
+        print("  ✔ source / cleaned 結構一致，沒有缺漏或孤兒檔。")
+    else:
+        if not missing.empty:
+            print("\n  2.1 source 有但 cleaned 沒有（缺少清理或路徑設定）：")
+            cols = [c for c in ["item", "subitem", "source_mtime", "source_status"] if c in missing.columns]
+            print(missing[cols].to_string(index=False))
+        if not orphan.empty:
+            print("\n  2.2 cleaned 有但 source 沒有（可能為舊格式或路徑未設定）：")
+            cols = [c for c in ["item", "subitem", "cleaned_mtime", "cleaned_status"] if c in orphan.columns]
+            print(orphan[cols].to_string(index=False))
+
+    # 2.x 明細（選配）
+    if show_detail:
+        print(f"\n[2.3] Source vs Cleaned 對比明細（前 {max_rows} 列）：")
+        if relation_status.empty:
+            print("  （沒有任何 source / cleaned 資料）")
+        else:
+            print(relation_status.head(max_rows).to_string(index=False))
+
+        print(f"\n[1.2] Cleaned 檔案層級明細（前 {max_rows} 列）：")
+        if cleaned_detail.empty:
+            print("  （沒有 cleaned 檔案）")
+        else:
+            print(cleaned_detail.head(max_rows).to_string(index=False))
+
+    # 3. 清理 log / error log 摘要
+    if show_log:
+        print("\n[3] 清理 log 摘要（若 log.pkl 存在）：")
+        if log_summary.empty:
+            print("  （找不到 log.pkl 或內容為空）")
+        else:
+            head = log_summary.head(max_rows)
+            print(head.to_string(index=False))
+            if len(log_summary) > max_rows:
+                print(f"\n  ... 共 {len(log_summary)} 筆，只顯示前 {max_rows} 筆。")
+
+        print("\n[4] error log 摘要（若 errorlog.pkl 存在）：")
+        if error_log.empty:
+            print("  （找不到 errorlog.pkl 或內容為空）")
+        else:
+            # 只列出前幾列與欄位名稱，避免內容過長
+            print("  欄位：", ", ".join(map(str, error_log.columns)))
+            print("\n  內容（前幾列）：")
+            print(error_log.head(max_rows).to_string(index=False))
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="TWSE 倉庫管理員報表")
+    parser.add_argument(
+        "--no-log",
+        action="store_true",
+        help="不要顯示清理 log / error log 摘要",
+    )
+    parser.add_argument(
+        "--detail",
+        action="store_true",
+        help="顯示 cleaned / relation 的明細（前 N 列）",
+    )
+    parser.add_argument(
+        "--max-rows",
+        type=int,
+        default=30,
+        help="明細列數上限（預設 30）",
+    )
+    args = parser.parse_args()
+
+    run_report(
+        today=None,
+        show_log=not args.no_log,
+        show_detail=args.detail,
+        max_rows=args.max_rows,
+    )
