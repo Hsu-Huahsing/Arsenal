@@ -6,9 +6,7 @@
 
 import logging
 import re
-import datetime as _dt
 from typing import Tuple
-import pandas as pd
 from os.path import exists, dirname
 from os import makedirs
 from shutil import copy2
@@ -16,6 +14,8 @@ from config.paths import dbpath_log
 from StevenTricks.file_utils import pickleio
 from pathlib import Path
 from typing import List, Optional, Iterable, Dict, Any
+import datetime as _dt
+import pandas as pd
 
 # 類別對應鍵，用來分類資料欄位的 key
 productkey = {
@@ -322,6 +322,128 @@ class LogMaintainer:
         self.logger.info(f"[log] 索引改名：{candidate!r} → {new_date_str}")
         return out
 # === end ===
+
+
+
+def scan_pkl_tree(base: Path, layer: str = "", suffix: str = ".pkl") -> pd.DataFrame:
+    """
+    掃描某個根目錄底下的 pkl 檔，假設結構為：
+        base/
+          <item>/
+            <subitem>.pkl
+            ...
+
+    參數
+    ----
+    base : Path
+        根目錄，例如 dbpath_cleaned 或 dbpath_source。
+    layer : str
+        標記來源層級，例如 'cleaned' 或 'source'，方便後續 pivot。
+    suffix : str
+        要掃描的副檔名（預設為 '.pkl'）。
+
+    回傳
+    ----
+    DataFrame，欄位：
+        - layer
+        - item
+        - subitem
+        - path
+        - size_mb
+        - mtime  (datetime)
+    """
+    base = Path(base)
+    rows = []
+    if not base.exists():
+        return pd.DataFrame(columns=["layer", "item", "subitem", "path", "size_mb", "mtime"])
+
+    for item_dir in base.iterdir():
+        if not item_dir.is_dir():
+            continue
+        item = item_dir.name
+        for p in item_dir.rglob(f"*{suffix}"):
+            if not p.is_file():
+                continue
+            stat = p.stat()
+            rows.append(
+                {
+                    "layer": layer,
+                    "item": item,
+                    "subitem": p.stem,
+                    "path": str(p),
+                    "size_mb": stat.st_size / 1024 / 1024,
+                    "mtime": _dt.datetime.fromtimestamp(stat.st_mtime),
+                }
+            )
+    if not rows:
+        return pd.DataFrame(columns=["layer", "item", "subitem", "path", "size_mb", "mtime"])
+    df = pd.DataFrame(rows)
+    df["mtime"] = pd.to_datetime(df["mtime"])
+    return df
+
+def add_days_lag(
+    df: pd.DataFrame,
+    date_col: str = "mtime",
+    today: _dt.date | None = None,
+) -> pd.DataFrame:
+    """
+    根據日期欄位計算與今天的落後天數，回傳新的 DataFrame（不修改原始 df）。
+
+    會新增：
+        - days_lag : int/float，today - date_col（天數）
+    """
+    if df.empty or date_col not in df.columns:
+        return df.copy()
+
+    out = df.copy()
+
+    # today 預設為今天
+    if today is None:
+        today = _dt.date.today()
+
+    # 轉成 datetime64[ns]
+    dates = pd.to_datetime(out[date_col])
+
+    # 差值會是 timedelta64[ns]，用 .dt.days 取天數
+    today_ts = pd.to_datetime(today)
+    delta = today_ts - dates
+    out["days_lag"] = delta.dt.days  # 不再做 astype("timedelta64[D]")
+
+    return out
+
+
+
+def add_status_by_lag(
+    df: pd.DataFrame,
+    lag_col: str = "days_lag",
+    ok_threshold: int = 1,
+    warn_threshold: int = 5,
+    col_name: str = "status",
+) -> pd.DataFrame:
+    """
+    根據 days_lag 給出狀態標記：
+        - <= ok_threshold        → 'OK'
+        - <= warn_threshold      → 'LAGGING'
+        - > warn_threshold 或 NA → 'STALE'
+    """
+    if df.empty:
+        return df.copy()
+    out = df.copy()
+
+    def _status(v):
+        try:
+            v_int = int(v)
+        except Exception:
+            return "STALE"
+        if v_int <= ok_threshold:
+            return "OK"
+        elif v_int <= warn_threshold:
+            return "LAGGING"
+        else:
+            return "STALE"
+
+    out[col_name] = out.get(lag_col, pd.Series([None] * len(out))).map(_status)
+    return out
 
 
 if __name__ == "__main__":
