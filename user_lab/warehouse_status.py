@@ -37,11 +37,19 @@ import sys
 import pandas as pd
 
 # ---------------------------------------------------------------------------
-# 一、設定路徑：自動把 Arsenal 和 StevenTricks 加到 sys.path
+# 嘗試用 __file__ 判斷專案 root；若在 IPython / notebook 沒有 __file__，
+# 就假設目前工作目錄 (cwd) 就是 Arsenal 專案 root。
 # ---------------------------------------------------------------------------
 
-_THIS_FILE = Path(__file__).resolve()      # .../Arsenal/user_lab/warehouse_status_lab.py
-_PROJECT_ROOT = _THIS_FILE.parents[1]      # .../Arsenal
+if "__file__" in globals():
+    # 正常以 .py 檔執行（python -m 或 IDE run）
+    _THIS_FILE = Path(__file__).resolve()      # .../Arsenal/user_lab/warehouse_status_lab.py
+    _PROJECT_ROOT = _THIS_FILE.parents[1]      # .../Arsenal
+else:
+    # 在 IPython / Jupyter 直接貼 code 執行時沒有 __file__
+    # 這裡假設你是從 Arsenal 專案根目錄啟動的 notebook：
+    #   cwd = /Users/.../Arsenal
+    _PROJECT_ROOT = Path.cwd()
 
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.append(str(_PROJECT_ROOT))
@@ -50,6 +58,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 _ST_ROOT = _PROJECT_ROOT.parent / "StevenTricks"
 if _ST_ROOT.exists() and str(_ST_ROOT) not in sys.path:
     sys.path.append(str(_ST_ROOT))
+
 
 
 # ---------------------------------------------------------------------------
@@ -72,6 +81,14 @@ SHOW_DETAIL = False   # 是否額外印出 cleaned_detail / relation_status 前�
 # ---------------------------------------------------------------------------
 # 四、核心呼叫：取得倉庫現況（這裡才是真的在動）
 # ---------------------------------------------------------------------------
+def _datetime_to_date_inplace(df: pd.DataFrame, cols: list[str]) -> None:
+    """
+    把指定欄位（若存在且為 datetime）改成只保留日期（YYYY-MM-DD）。
+    會直接修改傳入的 df。
+    """
+    for c in cols:
+        if c in df.columns:
+            df[c] = pd.to_datetime(df[c], errors="coerce").dt.date
 
 status = get_twse_status(include_log=SHOW_LOG, include_errorlog=SHOW_LOG)
 
@@ -84,6 +101,11 @@ missing: pd.DataFrame = status["missing"]
 orphan: pd.DataFrame = status["orphan"]
 log_summary: pd.DataFrame = status["log_summary"]
 error_log: pd.DataFrame = status["error_log"]
+
+# 把部分欄位的時間壓成 date（避免 print 出一大串秒數）
+_datetime_to_date_inplace(item_summary, ["min_mtime", "max_mtime"])
+_datetime_to_date_inplace(missing, ["source_mtime", "cleaned_mtime"])
+_datetime_to_date_inplace(orphan, ["source_mtime", "cleaned_mtime"])
 
 # ---------------------------------------------------------------------------
 # 五、基本摘要輸出（讓你用 script 跑，也能一眼看狀況）
@@ -99,11 +121,36 @@ def _title(text: str) -> str:
 print(_title(f"TWSE 倉庫總覽（截至 {today}）"))
 
 # 1. item 層級 summary
-print("\n[1] Cleaned 依 item 彙總：")
+ITEM_MAX_ROWS = 50  # 可以拉到最上面跟 SHOW_LOG 一起當參數
+
+print("\n[1] Cleaned 依 item 彙總（依 max_days_lag 由大到小，僅顯示前幾項）：")
 if item_summary.empty:
     print("  （尚無 cleaned 資料）")
 else:
-    print(item_summary.to_string(index=False))
+    # 只挑主要欄位，避免整張表太寬
+    cols_prefer = [
+        "item",
+        "n_subitems",
+        "n_files",
+        "min_mtime",
+        "max_mtime",
+        "max_days_lag",
+        "n_ok",
+        "n_lagging",
+        "n_stale",
+    ]
+    cols_exist = [c for c in cols_prefer if c in item_summary.columns]
+
+    display_item = item_summary.sort_values(
+        "max_days_lag",
+        ascending=False,
+        na_position="last",
+    )[cols_exist]
+
+    print(display_item.head(ITEM_MAX_ROWS).to_string(index=False))
+    if len(display_item) > ITEM_MAX_ROWS:
+        print(f"\n  ... 共 {len(display_item)} 個 item，只顯示前 {ITEM_MAX_ROWS} 個。")
+
 
 # 2. source vs cleaned 缺漏
 print("\n[2] Source vs Cleaned 缺漏檢查：")
@@ -123,6 +170,7 @@ else:
         print(orphan[cols].head(MAX_ROWS).to_string(index=False))
         if len(orphan) > MAX_ROWS:
             print(f"  ... 共 {len(orphan)} 筆，只顯示前 {MAX_ROWS} 筆。")
+
 
 # 3. log 摘要（選配）
 if SHOW_LOG:

@@ -207,7 +207,8 @@ def summarize_cleaned_by_item(today: Optional[date] = None) -> pd.DataFrame:
         max_mtime=("mtime", "max"),
         max_days_lag=("days_lag", "max"),
     )
-
+    summary["min_mtime"] = pd.to_datetime(summary["min_mtime"]).dt.date
+    summary["max_mtime"] = pd.to_datetime(summary["max_mtime"]).dt.date
     # 各狀態的筆數
     status_counts = (
         cln.groupby(["item", "status"])["path"]
@@ -276,6 +277,7 @@ def summarize_cleaning_log() -> pd.DataFrame:
         return grouped
 
     # 欄位名稱不符合預期，就直接回傳原始 DataFrame
+
     return log
 
 
