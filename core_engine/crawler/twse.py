@@ -122,25 +122,67 @@ class CrawlerTask:
             logger.info("已儲存 log 至硬碟，程序中止。")
             sys.exit(1)
 
+
         except Exception as e:
+
             # 諸如連線失敗、JSON 解碼錯誤或被反爬截斷等未知錯誤
+
             logger.error(f"資料抓取過程發生錯誤: {e}")
+
             logger.debug(format_exc())  # 輸出詳細的堆疊追蹤於 debug 日誌
-            # 在 log 標記錯誤，在 errorlog 記錄詳細資訊
-            self.cfg.log.loc[self.cfg.log.index == key, col] = 'request error'
+
+            now = datetime.datetime.now()
+
+            # 在 log 標記錯誤，在 errorlog 記錄詳細資訊（新舊欄位一起寫）
+
+            self.cfg.log.loc[self.cfg.log.index == key, col] = "request error"
+
             errordic = {
-                'crawlerdic': crawlerdic,
-                'errormessage1': format_exc(),
-                'errormessage2': str(e),
-                'errormessage3': 'request failed'
+
+                # 回溯這筆 request 的設定
+
+                "crawlerdic": crawlerdic,
+
+                # 一般 request 失敗通常沒有 response / status，可留空
+
+                "request": None,
+
+                "requeststatus": None,
+
+                # 舊欄位（相容舊版）
+
+                "errormessage1": format_exc(),
+
+                "errormessage2": str(e),
+
+                "errormessage3": "request failed",
+
+                # 新欄位（之後所有報表一律用這一組）
+
+                "error_reason": "request_exception",
+
+                "error_message": str(e),
+
+                "exception_type": type(e).__name__,
+
+                "log_time": now,
+
             }
+
             # 將錯誤細節以物件形式存入 errorlog 的該日期欄位 (使用 list 包裝以存入 DataFrame)
+
             self.cfg.errorlog.loc[key, col] = [errordic]
+
             # 儲存 log/errorlog 狀態
+
             pickleio(data=self.cfg.log, path=self.cfg.dbpath_log, mode="save")
+
             pickleio(data=self.cfg.errorlog, path=self.cfg.dbpath_errorlog, mode="save")
+
             # 發生錯誤時適當延長休眠時間再繼續，以免持續碰撞相同錯誤
-            self.cfg.sleepteller(mode='long')
+
+            self.cfg.sleepteller(mode="long")
+
             return  # 此筆任務終止，但迴圈可繼續下一筆
 
         # 處理 HTTP 回應代碼
@@ -175,26 +217,39 @@ class CrawlerTask:
 
         # 每完成一筆資料抓取，立即儲存更新後的 log（確保狀態持久化）
         pickleio(data=self.cfg.log, path=self.cfg.dbpath_log, mode="save")
-
     def _handle_status_error(self, ind, col, crawlerdic, res):
         """
-        處理 HTTP 狀態錯誤（如 403 或 500）。記錄錯誤資訊到 log 和 errorlog。
+        處理 HTTP 狀態碼錯誤（例如 403 或其他非 200 狀態碼）。
+        這裡統一 errorlog 的欄位命名：
+            - error_reason   : 錯誤類型（http_status_error）
+            - error_message  : 簡短說明
+            - log_time       : 實際記錄時間（datetime）
+        同時保留舊的 errormessage* 欄位以相容舊資料。
         """
         logger.error(f"HTTP 狀態碼錯誤: {res.status_code} (日期: {ind}, 項目: {col})")
-        # 在 log 中標記
-        self.cfg.log.loc[self.cfg.log.index == ind, col] = 'result error'
-        # 在 errorlog 中記錄詳情
+
+        now = datetime.datetime.now()
+
+        # log 標記
+        self.cfg.log.loc[self.cfg.log.index == ind, col] = "result error"
+
+        # 寫入 errorlog（新舊欄位一起寫）
         errordic = {
-            'crawlerdic': crawlerdic,
-            'request': res,
-            'requeststatus': res.status_code,
-            'errormessage1': 'result error'
+            "crawlerdic": crawlerdic,
+            "request": res,
+            "requeststatus": res.status_code,
+
+            # 舊欄位（相容舊版）
+            "errormessage1": "result error",
+            "errormessage2": "",
+            "errormessage3": "http status error",
+
+            # 新欄位（之後所有報表都用這一組）
+            "error_reason": "http_status_error",
+            "error_message": f"HTTP {res.status_code} from TWSE",
+            "log_time": now,
         }
         self.cfg.errorlog.loc[ind, col] = [errordic]
-        # 儲存最新的 log 和 errorlog
-        pickleio(data=self.cfg.log, path=self.cfg.dbpath_log, mode="save")
-        pickleio(data=self.cfg.errorlog, path=self.cfg.dbpath_errorlog, mode="save")
-        # 不在此函式終止程式，由呼叫者決定（透過拋出例外）
 
     @staticmethod
     def _clean_monthly_files( ind, col, datapath):
@@ -492,4 +547,5 @@ def main(argv: Optional[List[str]] = None) -> None:
 
 # 當直接執行此腳本時，呼叫 main() 處理命令列參數。
 if __name__ == "__main__":
-    main(['--update'])
+    # main(['--update'])
+    pass
