@@ -103,7 +103,6 @@ def init_twse_dashboard(
         include_log=include_log,
         include_errorlog=include_errorlog,
     )
-
     globals().update(
         dict(
             tw_today=dash["today"],
@@ -128,11 +127,9 @@ def init_twse_dashboard(
             tw_error_reason_summary=dash["error_reason_summary"],
             tw_error_date_summary=dash["error_date_summary"],
             tw_error_item_summary=dash["error_item_summary"],
-            tw_error_item_summary=dash["error_item_summary"],
             tw_expected_item_master=dash["expected_item_master"],
             tw_expected_item_status=dash["expected_item_status"],
             tw_unexpected_items=dash["unexpected_items"],
-
         )
     )
 
@@ -201,9 +198,9 @@ if __name__ == "__main__":
     # 1. 先把 TWSE 倉庫狀態載進來
     init_twse_dashboard()
 
-
-    print("\n[提示] 你現在可以在互動環境裡直接操作這些變數，例如：")
-    print("  tw_item_summary.head()")
-    print("  tw_relation_status.query(\"relation == 'source_only'\").head()")
-    print("  df_two_example.tail()")
-    print("  df_multi_example.tail()")
+    #
+    # print("\n[提示] 你現在可以在互動環境裡直接操作這些變數，例如：")
+    # print("  tw_item_summary.head()")
+    # print("  tw_relation_status.query(\"relation == 'source_only'\").head()")
+    # print("  df_two_example.tail()")
+    # print("  df_multi_example.tail()")
