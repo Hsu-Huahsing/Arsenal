@@ -1,7 +1,7 @@
 from pathlib import Path
 import pandas as pd
 from config.paths import dbpath_cleaned
-from StevenTricks.internal_db import DBPkl
+from StevenTricks.db.internal_db import DBPkl
 
 class TwseDB:
     """

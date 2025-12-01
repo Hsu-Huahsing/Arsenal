@@ -11,7 +11,7 @@ from os.path import exists, dirname
 from os import makedirs
 from shutil import copy2
 from config.paths import dbpath_log
-from StevenTricks.file_utils import pickleio
+from StevenTricks.io.file_utils import pickleio
 from pathlib import Path
 from typing import List, Optional, Iterable, Dict, Any
 import datetime as _dt

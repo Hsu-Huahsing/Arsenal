@@ -39,8 +39,8 @@ from bs4 import BeautifulSoup
 import pandas as pd
 from os import makedirs
 from os.path import exists, dirname
-from StevenTricks.control_flow import sleepteller
-from StevenTricks.file_utils import pickleio
+from StevenTricks.dev.control_flow import sleepteller
+from StevenTricks.io.file_utils import pickleio
 from config.conf import dailycollection, product_clean
 from config.col_rename import colname_dic
 from config.paths import dbpath_productlist

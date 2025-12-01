@@ -30,7 +30,6 @@ import pandas as pd
 from config.paths import (
     dbpath_cleaned,
     dbpath_source,
-    dbpath_log,
     dbpath_errorlog,
 )
 
@@ -42,7 +41,7 @@ from schema_utils import (
     add_status_by_lag,
     LogMaintainer,
 )
-from StevenTricks.file_utils import pickleio
+from StevenTricks.io.file_utils import pickleio
 
 
 # ---------------------------------------------------------------------------
@@ -794,7 +793,15 @@ def build_twse_dashboard(
         # schema 存在與否
         if "has_schema" not in expected_item_status.columns:
             expected_item_status["has_schema"] = False
-        expected_item_status["missing_schema"] = ~expected_item_status["has_schema"].fillna(False)
+
+        # 這裡用 True/False 乾淨地轉成 bool，再算 missing_schema
+        has_schema = (
+            expected_item_status["has_schema"]
+            .fillna(False)
+            .astype(bool)
+        )
+        expected_item_status["has_schema"] = has_schema
+        expected_item_status["missing_schema"] = ~has_schema
 
         # 找出「實際出現但不在 config.collection」的 item
         expected_set = set(expected_item_master["item"].unique())

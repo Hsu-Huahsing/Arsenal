@@ -62,20 +62,17 @@ from datetime import datetime
 import pandas as pd
 
 # ---- StevenTricks 與 config ----
-from StevenTricks.file_utils import pickleio
-from StevenTricks.file_utils import PathWalk_df
+from StevenTricks.io.file_utils import pickleio
+from StevenTricks.io.file_utils import PathWalk_df
 
-from StevenTricks.convert_utils import safe_replace, safe_numeric_convert, stringtodate
-from StevenTricks.dict_utils import keyinstr
-from StevenTricks.internal_db import DBPkl
+from StevenTricks.core.convert_utils import safe_replace, safe_numeric_convert, stringtodate
+from StevenTricks.core.dict_utils import keyinstr
+from StevenTricks.db.internal_db import DBPkl
 
 from config.conf import collection, fields_span, dropcol, key_set
 from config.col_rename import colname_dic, transtonew_col
 from config.col_format import numericol, datecol
 from config.paths import (
-    dbpath_source,
-    dbpath_cleaned,
-    dbpath_cleaned_log,
     db_local_root,
 )
 # ---- 雲端 / 本機 路徑快取 ----
@@ -90,7 +87,7 @@ LOCAL_DBPATH_SOURCE = LOCAL_DB_ROOT / "source"
 LOCAL_DBPATH_CLEANED = LOCAL_DB_ROOT / "cleaned"
 LOCAL_DBPATH_CLEANED_LOG = LOCAL_DBPATH_CLEANED / "log.pkl"
 
-from StevenTricks.staging import staging_path
+from StevenTricks.io.staging import staging_path
 
 DEBUG_LAST_DF: Optional[pd.DataFrame] = None
 DEBUG_LAST_CONTEXT: Dict[str, Any] = {}

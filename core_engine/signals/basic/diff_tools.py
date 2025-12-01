@@ -1,7 +1,7 @@
 from config.paths import dbpath_cleaned
 from config.col_format import numericol
-from StevenTricks.internal_db import DBPkl
-from StevenTricks.convert_utils import safe_numeric_convert
+from StevenTricks.db.internal_db import DBPkl
+from StevenTricks.core.convert_utils import safe_numeric_convert
 
 from core_engine.data_access.twse_db import TwseDB
 
