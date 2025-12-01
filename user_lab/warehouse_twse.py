@@ -132,7 +132,6 @@ def init_twse_dashboard(
             tw_unexpected_items=dash["unexpected_items"],
         )
     )
-
     if verbose:
         row = dash["overall_summary"].iloc[0]
         print(f"[TWSE 倉庫總覽] 截至 {row['as_of']}")
@@ -151,7 +150,8 @@ def init_twse_dashboard(
             f"  缺少 cleaned 的 pair：{int(row['n_missing_pairs'])}；"
             f"孤兒（只有 cleaned）pair：{int(row['n_orphan_pairs'])}"
         )
-        # 依 config.collection 檢查「應有 item」是否有抓到 / 有清理
+
+        # 依 config.collection 檢查「應有 item」是否有抓到 / 有清理 / 有 schema
         exp_status = dash.get("expected_item_status")
         if isinstance(exp_status, pd.DataFrame) and not exp_status.empty:
             n_expected = int(exp_status.shape[0])
@@ -169,6 +169,27 @@ def init_twse_dashboard(
                 f"有 cleaned 的：{n_cln_ok}（缺少 {n_cln_missing}）"
             )
 
+            # schema 覆蓋率
+            if "has_schema" in exp_status.columns and "missing_schema" in exp_status.columns:
+                n_schema_ok = int(exp_status["has_schema"].sum())
+                n_schema_missing = int(exp_status["missing_schema"].sum())
+                print(
+                    f"                               "
+                    f"有 schema 的：{n_schema_ok}（缺少 {n_schema_missing}）"
+                )
+
+                missing_schema_items = exp_status.loc[
+                    exp_status["missing_schema"], "item"
+                ].tolist()
+                if missing_schema_items:
+                    preview = "、".join(missing_schema_items[:5])
+                    more = (
+                        ""
+                        if len(missing_schema_items) <= 5
+                        else f"... 等共 {len(missing_schema_items)} 項"
+                    )
+                    print(f"  缺少 schema 的 item：{preview}{more}")
+
             missing_items = exp_status.loc[
                 exp_status["missing_cleaned"], "item"
             ].tolist()
@@ -181,13 +202,12 @@ def init_twse_dashboard(
                 )
                 print(f"  缺少 cleaned 的 item：{preview}{more}")
 
-            unexpected = dash.get("unexpected_items")
-            if isinstance(unexpected, pd.DataFrame) and not unexpected.empty:
-                print(
-                    f"  （另外有 {len(unexpected)} 個 item 出現在 source/cleaned，"
-                    f"但不在 config.collection，可看 tw_unexpected_items）"
-                )
-
+        unexpected = dash.get("unexpected_items")
+        if isinstance(unexpected, pd.DataFrame) and not unexpected.empty:
+            print(
+                f"  （另外有 {len(unexpected)} 個 item 出現在 source/cleaned，"
+                f"但不在 config.collection，可看 tw_unexpected_items）"
+            )
 
 
 # ---------------------------------------------------------------------------

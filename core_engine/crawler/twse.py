@@ -34,7 +34,7 @@ from os.path import join, exists
 from traceback import format_exc
 
 # 匯入自定義工具和設定
-from StevenTricks.df_utils import periodictable, findval
+from StevenTricks.core.df_utils import periodictable, findval
 from StevenTricks.file_utils import logfromfolder, pickleio, PathWalk_df
 from StevenTricks.net_utils import randomheader
 from StevenTricks.control_flow import sleepteller

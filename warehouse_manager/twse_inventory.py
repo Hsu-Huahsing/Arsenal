@@ -48,7 +48,31 @@ from StevenTricks.file_utils import pickleio
 # ---------------------------------------------------------------------------
 # 1. 檔案層級掃描
 # ---------------------------------------------------------------------------
+def _is_schema_path(path: str) -> bool:
+    """
+    根據檔名 / 路徑判斷是否為 'schema 類' 檔案，而非實際資料檔。
 
+    規則先用保守 heuristics：
+        - 主檔名含有 'schema'
+        - 主檔名以 '_schema' 結尾
+        - 路徑中有資料夾名稱叫 'schema'
+    之後如果你有更明確命名規則，可以再一起補。
+    """
+    if not isinstance(path, str) or not path:
+        return False
+    p = Path(path)
+    name = p.name.lower()
+    stem = p.stem.lower()
+
+    # 檔名 / 主檔名含 schema
+    if "schema" in stem or stem.endswith("_schema"):
+        return True
+
+    # 路徑中有資料夾叫 schema
+    if any(part.lower() == "schema" for part in p.parts):
+        return True
+
+    return False
 def scan_cleaned_files(today: Optional[date] = None) -> pd.DataFrame:
     """
     掃描 cleaned DB 資料夾，列出所有 item / subitem 對應的檔案、大小與最後更新時間，
@@ -62,11 +86,18 @@ def scan_cleaned_files(today: Optional[date] = None) -> pd.DataFrame:
         - size_mb
         - mtime
         - days_lag
-        - status  (OK / LAGGING / STALE)
+        - status      (OK / LAGGING / STALE)
+        - is_schema   (是否為 schema 類檔案)
+        - file_role   ("data" / "schema")
     """
     df = scan_pkl_tree(Path(dbpath_cleaned), layer="cleaned")
     if df.empty:
         return df
+
+    # 標記 schema 類 cleaned（不應被當成「資料檔孤兒」）
+    df["is_schema"] = df["path"].map(_is_schema_path)
+    df["file_role"] = df["is_schema"].map(lambda x: "schema" if x else "data")
+
     df = add_days_lag(df, date_col="mtime", today=today)
     df = add_status_by_lag(df, lag_col="days_lag")
     return df
@@ -79,6 +110,11 @@ def scan_source_files(today: Optional[date] = None) -> pd.DataFrame:
     df = scan_pkl_tree(Path(dbpath_source), layer="source")
     if df.empty:
         return df
+
+    # source 目前不會有 schema 檔，全部標成 data
+    df["is_schema"] = False
+    df["file_role"] = "data"
+
     df = add_days_lag(df, date_col="mtime", today=today)
     df = add_status_by_lag(df, lag_col="days_lag")
     return df
@@ -131,15 +167,18 @@ def merge_source_cleaned(today: Optional[date] = None) -> pd.DataFrame:
     """
     以 (item, subitem) 為主鍵，把 source / cleaned 的檔案層級資訊做 outer join。
 
-    主要欄位：
-        - item, subitem
-        - source_path, source_mtime, source_size_mb, source_days_lag, source_status
-        - cleaned_path, cleaned_mtime, cleaned_size_mb, cleaned_days_lag, cleaned_status
-        - relation : 'both' / 'source_only' / 'cleaned_only'
-        - mtime_diff_days : cleaned_mtime - source_mtime（正值代表 cleaned 比 source 新）
+    只針對「資料檔」做對應，schema 檔不參與 pair 計算，
+    避免被誤判成 cleaned_only 孤兒。
     """
     src = scan_source_files(today=today)
     cln = scan_cleaned_files(today=today)
+
+    # 僅使用「資料檔」來做 source/cleaned 對應
+    if "file_role" in src.columns:
+        src = src[src["file_role"] != "schema"]
+    if "file_role" in cln.columns:
+        cln = cln[cln["file_role"] != "schema"]
+
 
     src_cols = {
         "path": "source_path",
@@ -263,52 +302,89 @@ def prune_orphan_cleaned(today: Optional[date] = None, dry_run: bool = True) -> 
 # ---------------------------------------------------------------------------
 # 3. item 層級 summary
 # ---------------------------------------------------------------------------
-
 def summarize_cleaned_by_item(today: Optional[date] = None) -> pd.DataFrame:
     """
     針對 cleaned layer，彙總每個 item 的狀況：
 
-        - n_subitems               : subitem 數量
-        - n_files                  : 檔案數量（通常等於 n_subitems）
-        - min_mtime / max_mtime
-        - max_days_lag             : 最大落後天數
-        - n_ok / n_lagging / n_stale
+        - n_subitems               : 資料檔的 subitem 數量
+        - n_files                  : 資料檔檔案數量
+        - min_mtime / max_mtime    : 資料檔的最舊 / 最新 mtime
+        - max_days_lag             : 資料檔的最大落後天數
+        - n_ok / n_lagging / n_stale: 資料檔各狀態筆數
+        - n_schema_files           : schema 類 cleaned 檔數量
+        - has_schema               : 是否至少有一個 schema 檔
     """
     cln = scan_cleaned_files(today=today)
     if cln.empty:
         return cln
 
-    grp = cln.groupby("item", as_index=False)
+    # 分成 data 檔 & schema 檔
+    if "is_schema" in cln.columns:
+        data = cln[~cln["is_schema"]].copy()
+        schema = cln[cln["is_schema"]].copy()
+    else:
+        data = cln.copy()
+        schema = cln.iloc[0:0].copy()
 
-    summary = grp.agg(
-        n_subitems=("subitem", "nunique"),
-        n_files=("path", "count"),
-        min_mtime=("mtime", "min"),
-        max_mtime=("mtime", "max"),
-        max_days_lag=("days_lag", "max"),
-    )
-    summary["min_mtime"] = pd.to_datetime(summary["min_mtime"]).dt.date
-    summary["max_mtime"] = pd.to_datetime(summary["max_mtime"]).dt.date
-    # 各狀態的筆數
-    status_counts = (
-        cln.groupby(["item", "status"])["path"]
-        .count()
-        .unstack(fill_value=0)
-        .rename(
-            columns={
-                "OK": "n_ok",
-                "LAGGING": "n_lagging",
-                "STALE": "n_stale",
-            }
+    # --- 資料檔 summary ---
+    if data.empty:
+        # 沒有任何資料檔，僅用 schema 的 item 建骨架
+        items = schema["item"].drop_duplicates()
+        summary = pd.DataFrame({"item": items})
+        summary["n_subitems"] = 0
+        summary["n_files"] = 0
+        summary["min_mtime"] = pd.NaT
+        summary["max_mtime"] = pd.NaT
+        summary["max_days_lag"] = pd.NA
+        status_counts = pd.DataFrame(
+            0, index=items, columns=["n_ok", "n_lagging", "n_stale"]
         )
-    )
+    else:
+        grp = data.groupby("item", as_index=False)
+        summary = grp.agg(
+            n_subitems=("subitem", "nunique"),
+            n_files=("path", "count"),
+            min_mtime=("mtime", "min"),
+            max_mtime=("mtime", "max"),
+            max_days_lag=("days_lag", "max"),
+        )
+        summary["min_mtime"] = pd.to_datetime(summary["min_mtime"]).dt.date
+        summary["max_mtime"] = pd.to_datetime(summary["max_mtime"]).dt.date
 
-    # 確保三個欄位都存在
+        status_counts = (
+            data.groupby(["item", "status"])["path"]
+            .count()
+            .unstack(fill_value=0)
+            .rename(
+                columns={
+                    "OK": "n_ok",
+                    "LAGGING": "n_lagging",
+                    "STALE": "n_stale",
+                }
+            )
+        )
+
+    # 確保 n_ok / n_lagging / n_stale 三個欄位都存在
     for col in ["n_ok", "n_lagging", "n_stale"]:
         if col not in status_counts.columns:
             status_counts[col] = 0
 
     summary = summary.join(status_counts, on="item")
+
+    # --- schema 檔數量 & flag ---
+    if not schema.empty:
+        schema_cnt = (
+            schema.groupby("item")["path"]
+            .count()
+            .rename("n_schema_files")
+        )
+    else:
+        schema_cnt = pd.Series(dtype="int64", name="n_schema_files")
+
+    summary = summary.join(schema_cnt, on="item")
+    summary["n_schema_files"] = summary["n_schema_files"].fillna(0).astype(int)
+    summary["has_schema"] = summary["n_schema_files"] > 0
+
     summary = summary.sort_values("item").reset_index(drop=True)
     return summary
 
@@ -653,20 +729,11 @@ def build_twse_dashboard(
         expected_item_master = pd.DataFrame(
             columns=["item", "freq", "datemin", "n_expected_subitems", "code"]
         )
-
     if expected_item_master.empty:
+        # 沒有 config，就先給空殼
         expected_item_status = pd.DataFrame()
         unexpected_items = pd.DataFrame(columns=["item", "in_source", "in_cleaned"])
-        for col in [
-            "n_items_expected",
-            "n_items_expected_in_source",
-            "n_items_expected_in_cleaned",
-            "n_items_expected_missing_source",
-            "n_items_expected_missing_cleaned",
-            "n_items_unexpected_source",
-            "n_items_unexpected_cleaned",
-        ]:
-            overall_summary[col] = 0
+        # overall_summary 後面還是會建立，這裡不用動它
     else:
         # 把 source / cleaned 的 item summary merge 上去
         if source_item_summary is None or source_item_summary.empty:
@@ -698,6 +765,8 @@ def build_twse_dashboard(
                     "n_ok": "cleaned_n_ok",
                     "n_lagging": "cleaned_n_lagging",
                     "n_stale": "cleaned_n_stale",
+                    "n_schema_files": "cleaned_n_schema_files",
+                    "has_schema": "has_schema",
                 }
             )
 
@@ -707,7 +776,7 @@ def build_twse_dashboard(
             .merge(cln, on="item", how="left")
         )
 
-        # 計算 has_* / missing_* flag
+        # has_* / missing_* flag
         if "source_n_files" not in expected_item_status.columns:
             expected_item_status["source_n_files"] = 0
         if "cleaned_n_files" not in expected_item_status.columns:
@@ -721,6 +790,11 @@ def build_twse_dashboard(
         )
         expected_item_status["missing_source"] = ~expected_item_status["has_source"]
         expected_item_status["missing_cleaned"] = ~expected_item_status["has_cleaned"]
+
+        # schema 存在與否
+        if "has_schema" not in expected_item_status.columns:
+            expected_item_status["has_schema"] = False
+        expected_item_status["missing_schema"] = ~expected_item_status["has_schema"].fillna(False)
 
         # 找出「實際出現但不在 config.collection」的 item
         expected_set = set(expected_item_master["item"].unique())
@@ -747,12 +821,16 @@ def build_twse_dashboard(
             )
         unexpected_items = pd.DataFrame(rows)
 
+
         # 把 expected vs actual 的統計加進 overall_summary
         n_expected = int(expected_item_master.shape[0])
         n_expected_src = int(expected_item_status["has_source"].sum())
         n_expected_cln = int(expected_item_status["has_cleaned"].sum())
         n_missing_src = int(expected_item_status["missing_source"].sum())
         n_missing_cln = int(expected_item_status["missing_cleaned"].sum())
+        n_schema_ok = int(expected_item_status["has_schema"].sum())
+        n_schema_missing = int(expected_item_status["missing_schema"].sum())
+
         n_unexp_src = (
             int(unexpected_items["in_source"].sum())
             if not unexpected_items.empty
@@ -764,16 +842,22 @@ def build_twse_dashboard(
             else 0
         )
 
+        if overall_summary is None or overall_summary.empty:
+            overall_summary = pd.DataFrame([dict(as_of=today)])
+
         for col, val in [
             ("n_items_expected", n_expected),
             ("n_items_expected_in_source", n_expected_src),
             ("n_items_expected_in_cleaned", n_expected_cln),
             ("n_items_expected_missing_source", n_missing_src),
             ("n_items_expected_missing_cleaned", n_missing_cln),
+            ("n_items_expected_with_schema", n_schema_ok),
+            ("n_items_expected_missing_schema", n_schema_missing),
             ("n_items_unexpected_source", n_unexp_src),
             ("n_items_unexpected_cleaned", n_unexp_cln),
         ]:
             overall_summary[col] = val
+
 
     # 每個 item 的 relation 統計
     if relation_status is not None and not relation_status.empty:

@@ -44,7 +44,7 @@ from StevenTricks.file_utils import pickleio
 from config.conf import dailycollection, product_clean
 from config.col_rename import colname_dic
 from config.paths import dbpath_productlist
-from StevenTricks.df_utils import DataFrameMerger
+from StevenTricks.core.df_utils import DataFrameMerger
 import argparse
 from typing import Optional, List
 
