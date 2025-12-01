@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-user_lab/twse_cleaning_lab.py
+user_lab/cleaning_twse.py
 
 用途：
     - 從 user_lab 這邊操作 TWSE cleaned 檔的整理流程。
@@ -13,7 +13,7 @@ user_lab/twse_cleaning_lab.py
 
     1) 在 IPython / PyCharm console 裡：
 
-        %run -i path/to/Arsenal/user_lab/twse_cleaning_lab.py
+        %run -i path/to/Arsenal/user_lab/cleaning_twse.py
 
         # 然後在互動環境裡手動下：
         run_cloud_staging_clean()
@@ -23,9 +23,9 @@ user_lab/twse_cleaning_lab.py
 
     2) 直接當腳本跑（Terminal）：
 
-        python user_lab/twse_cleaning_lab.py --mode cloud_staging --batch-size 500 --bucket year
-        python user_lab/twse_cleaning_lab.py --mode cloud
-        python user_lab/twse_cleaning_lab.py --mode local --batch-size 500
+        python user_lab/cleaning_twse.py --mode cloud_staging --batch-size 500 --bucket year
+        python user_lab/cleaning_twse.py --mode cloud
+        python user_lab/cleaning_twse.py --mode local --batch-size 500
 """
 
 from __future__ import annotations

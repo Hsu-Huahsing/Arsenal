@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-user_lab/twse_crawler_lab.py
+user_lab/crawler_twse.py
 
 用途：
     - 從 user_lab 這邊操作 TWSE 爬蟲。
@@ -10,14 +10,14 @@ user_lab/twse_crawler_lab.py
 
 使用方式：
     1) 在 IPython / Jupyter 裡：
-        %run -i path/to/Arsenal/user_lab/twse_crawler_lab.py
+        %run -i path/to/Arsenal/user_lab/crawler_twse.py
         run_update()
         # 或
         run_symbol("2330", days=90)
 
     2) 直接當腳本跑：
-        python user_lab/twse_crawler_lab.py --update
-        python user_lab/twse_crawler_lab.py --symbol 2330 --days 90
+        python user_lab/crawler_twse.py --update
+        python user_lab/crawler_twse.py --symbol 2330 --days 90
 """
 
 from __future__ import annotations
@@ -106,5 +106,5 @@ if __name__ == "__main__":
         run_symbol(args.symbol, days=args.days)
     else:
         print("請使用 --update 或 --symbol / --days，例如：")
-        print("  python twse_crawler_lab.py --update")
-        print("  python twse_crawler_lab.py --symbol 2330 --days 90")
+        print("  python crawler_twse.py --update")
+        print("  python crawler_twse.py --symbol 2330 --days 90")
