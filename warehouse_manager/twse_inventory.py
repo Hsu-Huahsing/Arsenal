@@ -669,6 +669,17 @@ def build_twse_dashboard(
     log_summary = status["log_summary"]
     error_log = status["error_log"]
 
+    # schema 檔資訊：從 cleaned_detail 中拆出來
+    if cleaned_detail is not None and not cleaned_detail.empty and "file_role" in cleaned_detail.columns:
+        schema_detail = cleaned_detail[cleaned_detail["file_role"] == "schema"].copy()
+        schema_item_summary = (
+            schema_detail.groupby("item", as_index=False)
+            .agg(n_schema_files=("path", "count"))
+        )
+    else:
+        schema_detail = pd.DataFrame()
+        schema_item_summary = pd.DataFrame(columns=["item", "n_schema_files"])
+
     # 補上 source / source item summary
     source_detail = scan_source_files(today=today)
     source_item_summary = summarize_source_by_item(today=today)
@@ -803,6 +814,7 @@ def build_twse_dashboard(
         expected_item_status["has_schema"] = has_schema
         expected_item_status["missing_schema"] = ~has_schema
 
+
         # 找出「實際出現但不在 config.collection」的 item
         expected_set = set(expected_item_master["item"].unique())
         src_set = (
@@ -926,7 +938,6 @@ def build_twse_dashboard(
         error_reason_summary = pd.DataFrame()
         error_date_summary = pd.DataFrame()
         error_item_summary = pd.DataFrame()
-
     return dict(
         today=today,
         source_detail=source_detail,
@@ -949,6 +960,9 @@ def build_twse_dashboard(
         error_reason_summary=error_reason_summary,
         error_date_summary=error_date_summary,
         error_item_summary=error_item_summary,
+        # 新增
+        schema_detail=schema_detail,
+        schema_item_summary=schema_item_summary,
         expected_item_master=expected_item_master,
         expected_item_status=expected_item_status,
         unexpected_items=unexpected_items,
