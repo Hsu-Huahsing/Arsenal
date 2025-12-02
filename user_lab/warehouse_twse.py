@@ -217,6 +217,10 @@ def init_twse_dashboard(
 if __name__ == "__main__":
     # 1. 先把 TWSE 倉庫狀態載進來
     init_twse_dashboard()
+    # 看真孤兒列表（item / subitem / cleaned_path）
+    tw_orphan_pairs[["item", "subitem", "cleaned_path"]].head(50)
+
+    # 若你覺得 OK，再進入刪除流程
 
     #
     # print("\n[提示] 你現在可以在互動環境裡直接操作這些變數，例如：")
