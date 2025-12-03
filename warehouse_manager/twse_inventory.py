@@ -42,7 +42,6 @@ from schema_utils import (
     add_status_by_lag,
     LogMaintainer,
 )
-from StevenTricks.io.file_utils import pickleio
 
 
 # ---------------------------------------------------------------------------

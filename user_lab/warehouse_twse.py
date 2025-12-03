@@ -281,6 +281,29 @@ def _print_summary(dash: Dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 # 4. tw_* 風格的互動版：把結果塞進本模組 globals()
 # ---------------------------------------------------------------------------
+def print_twse_summary(
+        today: date | None = None,
+        include_log: bool = True,
+        include_errorlog: bool = True,
+) -> Dict[str, Any]:
+    """
+    主入口（推薦用法）：
+
+        from user_lab.warehouse_twse import print_twse_summary
+        dash = print_twse_summary()
+
+    會：
+        1) 呼叫 load_twse_dashboard()
+        2) 依照 _print_summary 的格式印出一份總覽
+        3) 回傳 dash dict，方便你後續自己用 DataFrame 分析。
+    """
+    dash = load_twse_dashboard(
+        today=today,
+        include_log=include_log,
+        include_errorlog=include_errorlog,
+    )
+    _print_summary(dash)
+    return dash
 
 def init_twse_dashboard(
     today: date | None = None,
