@@ -62,15 +62,9 @@ def load_twse_dashboard(
 # ---------------------------------------------------------------------------
 # 2. 共用的「精緻文字總覽」印法：照你指定的格式
 # ---------------------------------------------------------------------------
-
 def _print_summary(dash: Dict[str, Any]) -> None:
     """
-    依照指定格式，印出：
-
-        [TWSE 倉庫總覽]
-        [TWSE Crawler成效]
-        ▶ 落後天數最高的 item
-        ▶ error_log 摘要
+    依照指定格式，印出 TWSE 倉庫總覽 + Crawler 成效 + 落後 item + error_log 摘要。
     """
     overall = dash.get("overall_summary")
     if not isinstance(overall, pd.DataFrame) or overall.empty:
@@ -84,7 +78,7 @@ def _print_summary(dash: Dict[str, Any]) -> None:
     cleaned_item_summary = dash.get("cleaned_item_summary")
     schema_item_summary = dash.get("schema_item_summary")
     cleaned_detail = dash.get("cleaned_detail")
-    orphan_df = dash.get("orphan")              # 這裡假設已經是你定義的「真孤兒」
+    orphan_true = dash.get("orphan")  # 真孤兒
     relation_counts = dash.get("relation_counts")
     lag_item_top = dash.get("lag_item_top")
     error_flat = dash.get("error_log_flat")
@@ -95,29 +89,18 @@ def _print_summary(dash: Dict[str, Any]) -> None:
     # ------------------------
     print(f"[TWSE 倉庫總覽] 截至 {as_of}")
 
+    # 1) collection item 覆蓋狀況
     if isinstance(expected_status, pd.DataFrame) and not expected_status.empty:
         n_expected = int(expected_status.shape[0])
 
         n_src_ok = int(expected_status["has_source"].sum()) if "has_source" in expected_status.columns else 0
-        n_src_missing = (
-            int(expected_status["missing_source"].sum())
-            if "missing_source" in expected_status.columns
-            else max(n_expected - n_src_ok, 0)
-        )
+        n_src_missing = int(expected_status["missing_source"].sum()) if "missing_source" in expected_status.columns else max(n_expected - n_src_ok, 0)
 
         n_cln_ok = int(expected_status["has_cleaned"].sum()) if "has_cleaned" in expected_status.columns else 0
-        n_cln_missing = (
-            int(expected_status["missing_cleaned"].sum())
-            if "missing_cleaned" in expected_status.columns
-            else max(n_expected - n_cln_ok, 0)
-        )
+        n_cln_missing = int(expected_status["missing_cleaned"].sum()) if "missing_cleaned" in expected_status.columns else max(n_expected - n_cln_ok, 0)
 
         n_schema_ok = int(expected_status["has_schema"].sum()) if "has_schema" in expected_status.columns else 0
-        n_schema_missing = (
-            int(expected_status["missing_schema"].sum())
-            if "missing_schema" in expected_status.columns
-            else max(n_expected - n_schema_ok, 0)
-        )
+        n_schema_missing = int(expected_status["missing_schema"].sum()) if "missing_schema" in expected_status.columns else max(n_expected - n_schema_ok, 0)
 
         print(f"TWSE 設定 collection item 數：{n_expected}；")
         print(f"有 source 的：{n_src_ok}（缺少 {n_src_missing}）")
@@ -126,8 +109,8 @@ def _print_summary(dash: Dict[str, Any]) -> None:
     else:
         print("（找不到 expected_item_status，可先確認 config.collection 設定）")
 
-    # 每個 cleaned item 對 schema 的匹配狀況（以實際 cleaned_item_summary 為基準）
-    print("每個cleaned item 都會匹配一個 schema")
+    # 2) cleaned item 與 schema 的一對一匹配狀況（實際 cleaned 為基準）
+    print("每個 cleaned item 都會匹配一個 schema")
     if isinstance(cleaned_item_summary, pd.DataFrame) and not cleaned_item_summary.empty:
         tmp = cleaned_item_summary.copy()
         if "has_schema" in tmp.columns:
@@ -135,7 +118,7 @@ def _print_summary(dash: Dict[str, Any]) -> None:
         else:
             matched_mask = pd.Series(False, index=tmp.index)
 
-        n_cleaned_items = int(tmp.shape[0])  # 目前有幾個 cleaned item
+        n_cleaned_items = int(tmp.shape[0])
         n_matched = int(matched_mask.sum())
         unmatched_items = tmp.loc[~matched_mask, "item"].tolist()
         n_unmatched = len(unmatched_items)
@@ -144,7 +127,7 @@ def _print_summary(dash: Dict[str, Any]) -> None:
         if n_unmatched > 0:
             preview = "、".join(unmatched_items[:5])
             more = "" if n_unmatched <= 5 else f"... 等共 {n_unmatched} 項"
-            print(f"沒有達成匹配的有 {n_unmatched} ({preview}{more})")
+            print(f"沒有達成匹配的有 {n_unmatched}（{preview}{more}）")
         else:
             print("沒有達成匹配的有 0（所有 cleaned item 均已配置 schema）")
     else:
@@ -156,23 +139,18 @@ def _print_summary(dash: Dict[str, Any]) -> None:
     print("\n[TWSE Crawler成效] ")
 
     n_items_cleaned = int(row.get("n_items_cleaned", 0) or 0)
-    # 這裡把「預計要抓取的 source 檔案數」視為所有 (item, subitem) 組合
     n_pairs_total = int(row.get("n_pairs_total", 0) or 0)
-    n_pairs_both = int(row.get("n_pairs_both", 0) or 0)
+    n_pairs_source = int(row.get("n_pairs_source", 0) or 0)
     n_pairs_source_only = int(row.get("n_pairs_source_only", 0) or 0)
-
-    # 只要有 source 的 pair 都視為「已抓取的 source」
-    n_pairs_with_source = n_pairs_both + n_pairs_source_only
 
     print(f"已抓取 item 數（cleaned）：{n_items_cleaned}；")
     print(f"預計要抓取的 source 檔案數：{n_pairs_total}；")
-    print(f"已經抓取的 source 檔案數：{n_pairs_with_source}；")
+    print(f"已經抓取的 source 檔案數：{n_pairs_source}；")
     print(f"目前等待被 cleaned 的檔案數：{n_pairs_source_only}；")
 
-    # cleaned 檔案數與 schema 檔案數、匹配狀況（以檔案層級）
+    # cleaned 檔案數與 schema 檔案數、匹配狀況
     if isinstance(cleaned_detail, pd.DataFrame) and not cleaned_detail.empty:
         n_cleaned_files = int(cleaned_detail.shape[0])
-
         if "file_role" in cleaned_detail.columns:
             n_schema_files = int((cleaned_detail["file_role"] == "schema").sum())
         else:
@@ -180,12 +158,7 @@ def _print_summary(dash: Dict[str, Any]) -> None:
 
         # 以 item 為單位，看有哪些 item 同時出現在 cleaned 與 schema
         if isinstance(schema_item_summary, pd.DataFrame) and not schema_item_summary.empty:
-            cleaned_items = (
-                set(cleaned_item_summary["item"].unique())
-                if isinstance(cleaned_item_summary, pd.DataFrame)
-                and not cleaned_item_summary.empty
-                else set()
-            )
+            cleaned_items = set(cleaned_item_summary["item"].unique()) if isinstance(cleaned_item_summary, pd.DataFrame) and not cleaned_item_summary.empty else set()
             schema_items = set(schema_item_summary["item"].unique())
             items_with_both = cleaned_items & schema_items
             items_without_schema = cleaned_items - schema_items
@@ -197,22 +170,21 @@ def _print_summary(dash: Dict[str, Any]) -> None:
 
         print(
             f"    其中 cleaned 完成的檔案數為 {n_cleaned_files} "
-            f"(其中有 {n_schema_files} 個是 schema 檔案，"
-            f"schema 與 cleaned 檔案匹配的 item 數量為 {n_item_with_both}，"
-            f"未達成匹配的 item 數量為 {n_item_without_schema})"
+            f"(其中有 {n_schema_files} 個是 schema 檔案；"
+            f"{n_item_with_both} 個 item 的 cleaned 與 schema 有成功匹配，"
+            f"{n_item_without_schema} 個 item 仍缺 schema)"
         )
     else:
         print("    目前尚無 cleaned 檔案。")
 
-    # 真孤兒（這裡假設 dash['orphan'] 已經是你說的「用 item+日期 回頭查 source」後留下來的）
-    if isinstance(orphan_df, pd.DataFrame) and not orphan_df.empty:
-        n_true_orphan = int(orphan_df.shape[0])
+    # 真孤兒（整個 item 在 source 沒任何檔案）
+    if isinstance(orphan_true, pd.DataFrame) and not orphan_true.empty:
+        n_true_orphan = int(orphan_true.shape[0])
     else:
         n_true_orphan = 0
-
     print(
-        f"    另外，發現只有 cleaned 後的檔案，卻沒有對應的source檔案，"
-        f"共 {n_true_orphan} 筆，建議刪除。"
+        f"    另外，發現只有 cleaned 後的檔案，卻沒有對應的 source 檔案，"
+        f"共 {n_true_orphan} 筆（真孤兒）。"
     )
 
     # ------------------------
@@ -238,22 +210,19 @@ def _print_summary(dash: Dict[str, Any]) -> None:
             to_clean = int(r.get("source_only", 0) or 0)
 
             last_date_str = str(last_date) if pd.notna(last_date) else "未知日期"
-
             print(
-                f"           {item_name} （最新依次檔案記錄為 {last_date_str} ，"
-                f"至今共落後 {max_lag} 天，還要要補齊 {to_clean} 個檔案）"
+                f"           {item_name} （最新一次檔案記錄為 {last_date_str} ，"
+                f"至今共落後 {max_lag} 天，還要補齊 {to_clean} 個檔案）"
             )
     else:
-        print("  ▶ 落後天數最高的 item：目前沒有資料可供排序。")
+        print("  ▶ 落後天數最高的 item：目前沒有 cleaned 檔案，無法排序。")
 
     # ------------------------
     # ▶ error_log 統計
     # ------------------------
     if (
-        isinstance(error_flat, pd.DataFrame)
-        and not error_flat.empty
-        and isinstance(error_item_summary, pd.DataFrame)
-        and not error_item_summary.empty
+        isinstance(error_flat, pd.DataFrame) and not error_flat.empty
+        and isinstance(error_item_summary, pd.DataFrame) and not error_item_summary.empty
     ):
         n_items_in_error = int(error_item_summary.shape[0])
         n_errors_total = int(error_flat.shape[0])
@@ -267,6 +236,7 @@ def _print_summary(dash: Dict[str, Any]) -> None:
         for _, r in error_item_summary.head(4).iterrows():
             item_name = r.get("item")
             n_errors_item = int(r.get("n_errors", 0) or 0)
+
             sub = error_flat[error_flat["item"] == item_name].copy()
 
             # 日期範圍：優先用 log_date，其次用 date
@@ -279,53 +249,34 @@ def _print_summary(dash: Dict[str, Any]) -> None:
             else:
                 dmin = dmax = None
 
-            dmin_str = str(dmin) if dmin is not None and pd.notna(dmin) else "未知日期"
-            dmax_str = str(dmax) if dmax is not None and pd.notna(dmax) else "未知日期"
+            if dmin is not None and pd.notna(dmin):
+                dmin_str = str(dmin)
+            else:
+                dmin_str = "未知日期"
 
-            # 主要 error 原因：挑前幾個 error_reason
+            if dmax is not None and pd.notna(dmax):
+                dmax_str = str(dmax)
+            else:
+                dmax_str = "未知日期"
+
+            # 主要 error 原因：把所有不同的 error_reason 全部列出來（不再只取前幾個）
             if "error_reason" in sub.columns:
-                reason_counts = sub["error_reason"].fillna("unknown").value_counts()
-                top_reasons = list(reason_counts.index[:3])
-                reason_str = "、".join(top_reasons)
+                reasons = (
+                    sub["error_reason"]
+                    .fillna("unknown")
+                    .astype(str)
+                    .unique()          # 保留出現順序
+                )
+                reason_str = "、".join(reasons)
             else:
                 reason_str = "unknown"
 
             print(
                 f"         {item_name} 主要 error 記錄分布於 {dmin_str} ~ {dmax_str} "
-                f"共 {n_errors_item} 筆，error 原因為 {reason_str} ..."
+                f"共 {n_errors_item} 筆，error 原因為 {reason_str}"
             )
     else:
         print("  ▶ 位於 error_log 的 item：目前沒有 errorlog.pkl 或內容為空。")
-
-
-# ---------------------------------------------------------------------------
-# 3. 對外主函式：印出精緻總覽 + 回傳 dash
-# ---------------------------------------------------------------------------
-
-def print_twse_summary(
-    today: date | None = None,
-    include_log: bool = True,
-    include_errorlog: bool = True,
-) -> Dict[str, Any]:
-    """
-    主入口（推薦用法）：
-
-        from user_lab.warehouse_twse import print_twse_summary
-        dash = print_twse_summary()
-
-    會：
-        1) 呼叫 load_twse_dashboard()
-        2) 依照你指定的格式印出一次精緻總覽
-        3) 把完整 dash dict 回傳，方便後續 DataFrame 分析。
-    """
-    dash = load_twse_dashboard(
-        today=today,
-        include_log=include_log,
-        include_errorlog=include_errorlog,
-    )
-    _print_summary(dash)
-    return dash
-
 
 # ---------------------------------------------------------------------------
 # 4. tw_* 風格的互動版：把結果塞進本模組 globals()
