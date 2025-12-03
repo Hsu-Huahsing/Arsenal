@@ -259,6 +259,36 @@ def find_orphan_cleaned(today: Optional[date] = None) -> pd.DataFrame:
         return merged
     return merged.loc[merged["relation"] == "cleaned_only"].copy()
 
+def split_orphan_pairs_by_item(relation_status: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    把 relation_status 裡 relation == 'cleaned_only' 的列拆成兩類：
+
+    - orphan_true   : 該 item 在 source 完全找不到任何檔案（連其他 subitem 也沒有）
+                      → 高機率是真孤兒，可以考慮刪除。
+    - orphan_all    : 原始的 cleaned_only 列，多了一個 has_source_for_item 欄位：
+                        has_source_for_item = True  表示這個 cleaned 檔的 item，
+                                                 在 source 層級還是有別的 subitem 檔案，
+                                                 通常只是命名不一致（例如 cleaned 用了 source 的 subitem 名字）。
+                        has_source_for_item = False 表示整個 item 在 source 都沒有任何檔案。
+
+    這樣可以避免「只是命名方式不同」的 cleaned 檔被誤判成孤兒。
+    """
+    if relation_status is None or relation_status.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    orphan_all = relation_status.loc[relation_status["relation"] == "cleaned_only"].copy()
+    if orphan_all.empty:
+        return pd.DataFrame(), orphan_all
+
+    # 只要同一個 item 在 relation_status 裡有任何 source_path，就視為「這個 item 在 source 有資料」
+    has_src_mask = relation_status["source_path"].notna() & (relation_status["source_path"] != "")
+    items_with_source = set(relation_status.loc[has_src_mask, "item"].unique())
+
+    orphan_all["has_source_for_item"] = orphan_all["item"].isin(items_with_source)
+
+    orphan_true = orphan_all.loc[~orphan_all["has_source_for_item"]].copy()
+
+    return orphan_true, orphan_all
 
 def prune_orphan_cleaned(today: Optional[date] = None, dry_run: bool = True) -> pd.DataFrame:
     """
@@ -620,7 +650,6 @@ def get_twse_status(
         "error_log": error_log,
     }
 
-
 def build_twse_dashboard(
     today: Optional[date] = None,
     include_log: bool = True,
@@ -641,8 +670,9 @@ def build_twse_dashboard(
     cleaned_detail = status["cleaned_detail"]
     item_summary = status["item_summary"].copy()
     relation_status = status["relation_status"]
-    missing = status["missing"].copy()
-    orphan = status["orphan"].copy()
+    # 這兩個是 pair 層級的 source_only / cleaned_only（舊版）
+    missing_pairs = status["missing"].copy()
+    orphan_pairs_raw = status["orphan"].copy()
     log_summary = status["log_summary"]
     error_log = status["error_log"]
 
@@ -662,6 +692,17 @@ def build_twse_dashboard(
     source_item_summary = summarize_source_by_item(today=today)
     cleaned_item_summary = item_summary
 
+    # 重新定義 missing / orphan（真孤兒 vs 名稱不一致）
+    if relation_status is None or relation_status.empty:
+        missing = pd.DataFrame()
+        orphan_true = pd.DataFrame()
+        orphan_all = pd.DataFrame()
+    else:
+        # source_only 一樣視為「等待被 cleaned 的檔案」
+        missing = relation_status.loc[relation_status["relation"] == "source_only"].copy()
+        # cleaned_only 全部候選，進一步拆成 true / linked
+        orphan_true, orphan_all = split_orphan_pairs_by_item(relation_status)
+
     # 小工具：把時間欄位轉成 date（只到日）
     def _to_date(df: pd.DataFrame, cols: list[str]) -> None:
         if df is None or df.empty:
@@ -671,9 +712,9 @@ def build_twse_dashboard(
                 df[c] = pd.to_datetime(df[c], errors="coerce").dt.date
 
     _to_date(missing, ["source_mtime", "cleaned_mtime"])
-    _to_date(orphan, ["source_mtime", "cleaned_mtime"])
+    _to_date(orphan_true, ["source_mtime", "cleaned_mtime"])
 
-    # 整體統計 overall_summary（只看 data 檔的 pair）
+    # 先算整體統計 overall_summary（包含 crawler 成效相關欄位）
     rel = relation_status
     if rel is None or rel.empty:
         n_pairs_total = n_pairs_source = n_pairs_cleaned = 0
@@ -694,17 +735,23 @@ def build_twse_dashboard(
         [
             dict(
                 as_of=today,
+                # item / 檔案層級
                 n_items_cleaned=n_items_cleaned,
                 n_source_files=int(source_detail.shape[0]),
                 n_cleaned_files=int(cleaned_detail.shape[0]),
+                # (item, subitem) 組合與 crawler 成效
                 n_pairs_total=n_pairs_total,
                 n_pairs_source=n_pairs_source,
                 n_pairs_cleaned=n_pairs_cleaned,
                 n_pairs_both=n_both,
                 n_pairs_source_only=n_source_only,
                 n_pairs_cleaned_only=n_cleaned_only,
+                # 缺少 cleaned / cleaned_only 統計
                 n_missing_pairs=int(len(missing)),
-                n_orphan_pairs=int(len(orphan)),
+                # cleaned_only 全部候選數量
+                n_orphan_pairs=int(orphan_all.shape[0]),
+                # 真孤兒（整個 item 在 source 沒檔案）的數量
+                n_true_orphan_pairs=int(orphan_true.shape[0]),
             )
         ]
     )
@@ -716,11 +763,11 @@ def build_twse_dashboard(
         expected_item_master = pd.DataFrame(
             columns=["item", "freq", "datemin", "n_expected_subitems", "code"]
         )
-
     if expected_item_master.empty:
         expected_item_status = pd.DataFrame()
         unexpected_items = pd.DataFrame(columns=["item", "in_source", "in_cleaned"])
     else:
+        # 把 source / cleaned 的 item summary merge 上去
         if source_item_summary is None or source_item_summary.empty:
             src = pd.DataFrame(columns=["item"])
         else:
@@ -761,6 +808,7 @@ def build_twse_dashboard(
             .merge(cln, on="item", how="left")
         )
 
+        # has_* / missing_* flag
         if "source_n_files" not in expected_item_status.columns:
             expected_item_status["source_n_files"] = 0
         if "cleaned_n_files" not in expected_item_status.columns:
@@ -775,15 +823,20 @@ def build_twse_dashboard(
         expected_item_status["missing_source"] = ~expected_item_status["has_source"]
         expected_item_status["missing_cleaned"] = ~expected_item_status["has_cleaned"]
 
-        # schema 存在與否（這裡順便修掉 pandas 的 FutureWarning）
+        # schema 存在與否（套用剛剛修正過的 has_schema 邏輯）
         if "has_schema" not in expected_item_status.columns:
-            expected_item_status["has_schema"] = False
+            expected_item_status["has_schema"] = pd.Series(
+                False, index=expected_item_status.index
+            )
 
-        s = expected_item_status["has_schema"]
-        s = s.infer_objects(copy=False)   # 先把 object 裡的 bool 推回 bool
-        s = s.fillna(False).astype(bool)
-        expected_item_status["has_schema"] = s
-        expected_item_status["missing_schema"] = ~s
+        has_schema = (
+            expected_item_status["has_schema"]
+            .astype("boolean")
+            .fillna(False)
+            .astype(bool)
+        )
+        expected_item_status["has_schema"] = has_schema
+        expected_item_status["missing_schema"] = ~has_schema
 
         # 找出「實際出現但不在 config.collection」的 item
         expected_set = set(expected_item_master["item"].unique())
@@ -819,8 +872,16 @@ def build_twse_dashboard(
         n_schema_ok = int(expected_item_status["has_schema"].sum())
         n_schema_missing = int(expected_item_status["missing_schema"].sum())
 
-        n_unexp_src = int(unexpected_items["in_source"].sum()) if not unexpected_items.empty else 0
-        n_unexp_cln = int(unexpected_items["in_cleaned"].sum()) if not unexpected_items.empty else 0
+        n_unexp_src = (
+            int(unexpected_items["in_source"].sum())
+            if not unexpected_items.empty
+            else 0
+        )
+        n_unexp_cln = (
+            int(unexpected_items["in_cleaned"].sum())
+            if not unexpected_items.empty
+            else 0
+        )
 
         if overall_summary is None or overall_summary.empty:
             overall_summary = pd.DataFrame([dict(as_of=today)])
@@ -865,7 +926,7 @@ def build_twse_dashboard(
         lag_item_top = pd.DataFrame()
 
     missing_top = missing.head(top_rows).copy()
-    orphan_top = orphan.head(top_rows).copy()
+    orphan_top = orphan_true.head(top_rows).copy()
 
     # error_log 攤平與統計
     if include_errorlog and error_log is not None and not error_log.empty:
@@ -905,8 +966,13 @@ def build_twse_dashboard(
         cleaned_detail=cleaned_detail,
         item_summary=item_summary,
         relation_status=relation_status,
+        # 這裡的 missing / orphan 已經改成：
+        #   missing = source_only
+        #   orphan = 真孤兒（整個 item 在 source 沒檔案）
         missing=missing,
-        orphan=orphan,
+        orphan=orphan_true,
+        # 另外補一個 orphan_candidate = 所有 cleaned_only（含 has_source_for_item）
+        orphan_candidate=orphan_all,
         log_summary=log_summary,
         error_log=error_log,
         overall_summary=overall_summary,
@@ -921,13 +987,13 @@ def build_twse_dashboard(
         error_reason_summary=error_reason_summary,
         error_date_summary=error_date_summary,
         error_item_summary=error_item_summary,
+        # schema / expected item / unexpected item
         schema_detail=schema_detail,
         schema_item_summary=schema_item_summary,
         expected_item_master=expected_item_master,
         expected_item_status=expected_item_status,
         unexpected_items=unexpected_items,
     )
-
 
 # ---------------------------------------------------------------------------
 # 6. 簡易 CLI 報表（取代舊的 warehouse_report）
