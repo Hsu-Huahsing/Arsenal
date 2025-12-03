@@ -5,26 +5,23 @@ user_lab/warehouse_twse.py
 用途：
     - 當成 Arsenal 的「TWSE 倉庫主控台」。
     - 調用 warehouse_manager.twse_inventory.build_twse_dashboard，
-      幫你印出精緻版總覽，並回傳 dashboard dict。
+      幫你印出精緻版總覽，並（選擇性）把結果展開成 tw_* 變數。
 
 使用情境：
 
-1) 在 PyCharm console / 任何 .py：
-
+1) 在任何 .py（推薦）：
     from user_lab.warehouse_twse import print_twse_summary
 
     dash = print_twse_summary()
-    # 上面這行會印出總覽，同時把完整 dash dict 回傳
+    dash["overall_summary"]
     dash["orphan_top"].head()
-    dash["missing_top"].head()
 
-2) 如果你喜歡 tw_* 變數（互動環境）：
-
+2) 在互動環境想要 tw_* 變數：
     import user_lab.warehouse_twse as tw
 
     tw.init_twse_dashboard()
     tw.tw_overall_summary
-    tw.tw_orphan_pairs.head()
+    tw.tw_orphan_pairs[["item", "subitem", "cleaned_path"]].head()
 """
 
 from __future__ import annotations
@@ -67,10 +64,9 @@ def load_twse_dashboard(
 def _print_summary(dash: Dict[str, Any]) -> None:
     """
     給 print_twse_summary / init_twse_dashboard 共用的印法。
-    專心處理你要的「精緻版總覽」。
+    專心處理「精緻版總覽」。
     """
     overall = dash.get("overall_summary")
-
     if not isinstance(overall, pd.DataFrame) or overall.empty:
         print("[TWSE 倉庫總覽] 尚無 overall_summary 資料（可能 cleaned / source 都是空的）")
         return
@@ -155,7 +151,7 @@ def _print_summary(dash: Dict[str, Any]) -> None:
             f"但不在 config.collection，可看 dash['unexpected_items']）"
         )
 
-    # 4) 想要的話可以再加「落後最嚴重 / 缺漏最多」Top N
+    # 4) Top N：誰最落後、誰缺最多、誰是孤兒
     lag_item_top = dash.get("lag_item_top")
     missing_top = dash.get("missing_top")
     orphan_top = dash.get("orphan_top")
@@ -163,17 +159,20 @@ def _print_summary(dash: Dict[str, Any]) -> None:
     if isinstance(lag_item_top, pd.DataFrame) and not lag_item_top.empty:
         print("\n  ▶ 落後天數最高的 item（前幾名）：")
         cols = [c for c in ["item", "max_days_lag", "n_files"] if c in lag_item_top.columns]
-        print("    " + lag_item_top[cols].head(5).to_string(index=False).replace("\n", "\n    "))
+        txt = lag_item_top[cols].head(5).to_string(index=False)
+        print("    " + txt.replace("\n", "\n    "))
 
     if isinstance(missing_top, pd.DataFrame) and not missing_top.empty:
         print("\n  ▶ 缺少 cleaned 的 (item, subitem) 範例（前幾筆）：")
         cols = [c for c in ["item", "subitem", "source_mtime", "source_status"] if c in missing_top.columns]
-        print("    " + missing_top[cols].head(5).to_string(index=False).replace("\n", "\n    "))
+        txt = missing_top[cols].head(5).to_string(index=False)
+        print("    " + txt.replace("\n", "\n    "))
 
     if isinstance(orphan_top, pd.DataFrame) and not orphan_top.empty:
         print("\n  ▶ 孤兒（只有 cleaned）(item, subitem) 範例（前幾筆）：")
         cols = [c for c in ["item", "subitem", "cleaned_mtime", "cleaned_status"] if c in orphan_top.columns]
-        print("    " + orphan_top[cols].head(5).to_string(index=False).replace("\n", "\n    "))
+        txt = orphan_top[cols].head(5).to_string(index=False)
+        print("    " + txt.replace("\n", "\n    "))
 
 
 # ---------------------------------------------------------------------------
@@ -186,14 +185,14 @@ def print_twse_summary(
     include_errorlog: bool = True,
 ) -> Dict[str, Any]:
     """
-    主入口（推薦用法）：
+    主入口（推薦）：
 
         from user_lab.warehouse_twse import print_twse_summary
         dash = print_twse_summary()
 
     會：
         1) 呼叫 build_twse_dashboard()
-        2) 印出一次精緻總覽（你熟悉的那種格式）
+        2) 印出一次精緻總覽
         3) 把完整 dash dict 回傳，方便後續 DataFrame 分析。
     """
     dash = load_twse_dashboard(
@@ -275,9 +274,8 @@ def init_twse_dashboard(
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    # 直接：
+    # 專案根目錄：
     #   python -m user_lab.warehouse_twse
-    # 或
+    # 或直接：
     #   python user_lab/warehouse_twse.py
-    # 會印一份總覽。
     print_twse_summary()
