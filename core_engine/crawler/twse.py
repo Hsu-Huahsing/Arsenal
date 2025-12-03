@@ -24,7 +24,6 @@
 """
 
 import sys
-import datetime
 import logging
 import argparse
 from typing import Optional, List
@@ -41,6 +40,10 @@ from StevenTricks.dev.control_flow import sleepteller
 from config.conf import collection
 from config.paths import db_root, dbpath_source, dbpath_log, dbpath_errorlog
 from schema_utils import warehouseinit
+import datetime
+from json import JSONDecodeError
+
+import requests
 
 # 設定全域 logger
 logger = logging.getLogger(__name__)
@@ -53,6 +56,47 @@ if not _root.handlers:  # 避免重複加 handler
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 logger.setLevel(logging.DEBUG)  # 本模組 logger 也設為 DEBUG
+
+def classify_error(e: Exception, resp=None) -> str:
+    """
+    根據 Exception + HTTP response，把錯誤分成比較有意義的類型，
+    用來填入 errorlog.pkl 裡的 error_reason。
+    """
+    # 1) HTTP 狀態碼（如果有 response）
+    status = getattr(resp, "status_code", None)
+    if status is not None:
+        try:
+            s = int(status)
+        except Exception:
+            s = None
+        if s is not None:
+            if 500 <= s <= 599:
+                return "http_5xx"          # TWSE server / gateway 問題
+            if s == 404:
+                return "http_404"          # 固定不存在的網址或日期
+            if s == 403:
+                return "http_403"          # 被擋 / 權限問題
+            if 400 <= s <= 499:
+                return "http_4xx_other"    # 其它 4xx
+
+    # 2) requests 相關錯誤（網路 / timeout）
+    if isinstance(e, requests.exceptions.Timeout):
+        return "timeout"
+    if isinstance(e, requests.exceptions.ConnectionError):
+        return "connection_error"
+
+    # 3) JSON / Parser 相關錯誤
+    if isinstance(e, JSONDecodeError):
+        return "json_decode_error"
+
+    # TODO: 如果你有自訂 ParserError / SchemaError，可以在這裡再補幾個：
+    # from some_module import ParserError
+    # if isinstance(e, ParserError):
+    #     return "parser_error"
+
+    # 4) 其餘抓不到的就歸類為 unknown
+    return "unknown"
+
 
 class CrawlerConfig:
     """
@@ -123,51 +167,32 @@ class CrawlerTask:
             sys.exit(1)
 
 
+
         except Exception as e:
 
-            # 諸如連線失敗、JSON 解碼錯誤或被反爬截斷等未知錯誤
+            # resp 有可能在 try 之前就沒定義，所以用 getattr 保險一下
 
-            logger.error(f"資料抓取過程發生錯誤: {e}")
+            resp_obj = locals().get("resp", None)
 
-            logger.debug(format_exc())  # 輸出詳細的堆疊追蹤於 debug 日誌
+            error = {
 
-            now = datetime.datetime.now()
-
-            # 在 log 標記錯誤，在 errorlog 記錄詳細資訊（新舊欄位一起寫）
-
-            self.cfg.log.loc[self.cfg.log.index == key, col] = "request error"
-
-            errordic = {
-
-                # 回溯這筆 request 的設定
-
-                "crawlerdic": crawlerdic,
-
-                # 一般 request 失敗通常沒有 response / status，可留空
-
-                "request": None,
-
-                "requeststatus": None,
-
-                # 舊欄位（相容舊版）
-
-                "errormessage1": format_exc(),
-
-                "errormessage2": str(e),
-
-                "errormessage3": "request failed",
-
-                # 新欄位（之後所有報表一律用這一組）
-
-                "error_reason": "request_exception",
+                "error_reason": classify_error(e, resp_obj),
 
                 "error_message": str(e),
 
+                "requeststatus": getattr(resp_obj, "status_code", None),
+
                 "exception_type": type(e).__name__,
 
-                "log_time": now,
+                "log_time": datetime.datetime.now(),
 
             }
+
+            # 原本你怎麼寫進 errorlog.pkl，就照舊呼叫
+
+            # 例如：
+
+            # log_maintainer.append(item=item_name, error=error)
 
             # 將錯誤細節以物件形式存入 errorlog 的該日期欄位 (使用 list 包裝以存入 DataFrame)
 
