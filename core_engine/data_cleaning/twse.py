@@ -575,6 +575,7 @@ def _write_to_db(
     subitem: str,
     bucket_mode: str = "all",     # ★ 已有參數
 ) -> None:
+    global DEBUG_LAST_DF, DEBUG_LAST_CONTEXT
     """
     預設 PK 規則：
       - 同時有 '代號' 與 'date' → ['代號','date']
@@ -636,7 +637,6 @@ def _write_to_db(
                     primary_key=(pk if pk else None),
                 )
             except Exception as e:
-                global DEBUG_LAST_DF, DEBUG_LAST_CONTEXT
                 DEBUG_LAST_DF = df_chunk
                 conflict = getattr(dbi, "schema_conflict", None)
                 try:
@@ -730,7 +730,6 @@ def _write_to_db(
             )
 
     except Exception as e:
-        global DEBUG_LAST_DF, DEBUG_LAST_CONTEXT
         DEBUG_LAST_DF = df
         conflict = getattr(dbi, "schema_conflict", None)
         try:
