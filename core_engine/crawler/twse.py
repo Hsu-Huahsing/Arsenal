@@ -36,7 +36,7 @@ from traceback import format_exc
 from StevenTricks.core.df_utils import periodictable, findval
 from StevenTricks.io.file_utils import logfromfolder, pickleio, PathWalk_df
 from StevenTricks.io.net_utils import randomheader
-from StevenTricks.dev.control_flow import sleepteller
+from StevenTricks.dev.code_utils import sleepteller
 from config.conf import collection
 from config.paths import db_root, dbpath_source, dbpath_log, dbpath_errorlog
 from schema_utils import warehouseinit
