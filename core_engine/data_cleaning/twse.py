@@ -172,6 +172,19 @@ def _is_partition_by_date_item(item: str) -> bool:
 
     return False
 
+def _is_me_freq_item(item: str) -> bool:
+    """
+    判斷是否為「每月（但每天重抓當月所有日子）」的類型：
+    - 依據 config.conf.collection[item]['freq'] == 'ME'
+    """
+    cfg = collection.get(item) or {}
+    freq = cfg.get("freq")
+    if freq is None:
+        return False
+
+    s = str(freq).strip().upper()
+    return s == "ME"
+
 def _make_bucket_key(date_series: pd.Series, mode: str) -> pd.Series:
     """
     把 date 欄位轉成「bucket key」，依 mode 回傳字串 Series：
@@ -554,21 +567,25 @@ def _db_path_for_item(item: str) -> str:
     _ensure_dir(dbpath_cleaned)
     return join(dbpath_cleaned, f"{item}")
 
-
 def _write_to_db(
     df: pd.DataFrame,
     convert_mode: str = "upcast",
     *,
     item: str,
     subitem: str,
-    bucket_mode: str = "all",     # ★ 新增
+    bucket_mode: str = "all",     # ★ 已有參數
 ) -> None:
     """
     預設 PK 規則：
       - 同時有 '代號' 與 'date' → ['代號','date']
       - 僅有 'date' → ['date']
       - 否則不設 PK（交由 DBPkl 處理）
+
+    另外：
+      - 若為 freq='ME' 的表，寫入前會先讀取既有資料，只保留
+        「DB 裡還沒有的 date」再寫入，避免重複 date 觸發 PK 錯誤。
     """
+    # ---- 推 PK ----
     pk: List[str] = []
     if "代號" in df.columns and "date" in df.columns:
         pk = ["代號", "date"]
@@ -590,14 +607,10 @@ def _write_to_db(
         bucket_mode,
     )
 
-    # ---- ★ 若是日頻率 + bucket_mode != all → 依 bucket 拆表 ----
+    # ---- ★ 日頻率 + bucket_mode != all → 分桶寫入（維持原有邏輯） ----
     if partition_by_date and bucket_mode.lower() != "all":
-        # 產生 bucket key（字串）
         bucket_key = _make_bucket_key(df["date"], bucket_mode)
 
-        # 一個 bucket 對應一個實際 table，例如：
-        #   subitem='三大法人買賣超日報', bucket='2020-01'
-        #   → table_name='三大法人買賣超日報__2020-01'
         for b, df_chunk in df.groupby(bucket_key):
             table_name = f"{subitem}__{b}"
 
@@ -609,8 +622,6 @@ def _write_to_db(
                 len(df_chunk),
             )
 
-            # ★ data 檔名用 table_name（會帶 __2012 等），
-            #   schema 一律用 logical_table_name=subitem
             dbi = DBPkl(
                 db_path,
                 table_name,
@@ -651,14 +662,60 @@ def _write_to_db(
                     logger.debug(f"[DB schema conflict] {conflict}")
                 raise
 
-        # 分桶模式下，這個函式到這裡就結束，不再走下面的「單一表」邏輯
-        return
+        return  # 分桶模式結束
 
-    # ---- ★ 否則維持原本單一表行為 ----
+    # ---- 單一表模式（包含 freq='ME' 的處理） ----
     dbi = DBPkl(db_path, subitem, logical_table_name=subitem)
 
+    # ★ 對所有 freq='ME' 的表：只寫「DB 尚未存在的 date」
+    if _is_me_freq_item(item) and "date" in df.columns:
+        try:
+            # 這裡假設 DBPkl 有一個讀取整張表的方法叫 read_db()
+            # 如果你實作的是其他名字（例如 load_db、read），把這行對應改一下即可。
+            existing = dbi.read_db()
+        except FileNotFoundError:
+            existing = None
+        except Exception as e:
+            logger.warning(
+                "讀取既有資料失敗，freq='ME' 將改成全量寫入：item=%s, subitem=%s, err=%s",
+                item,
+                subitem,
+                e,
+            )
+            existing = None
+
+        if existing is not None and not existing.empty and "date" in existing.columns:
+            # 統一成 datetime，避免型別不一致比對不到
+            existing_dates = pd.to_datetime(existing["date"]).dt.normalize()
+            existing_set = set(existing_dates.unique())
+
+            new_dates = pd.to_datetime(df["date"]).dt.normalize()
+            before_rows = len(df)
+            mask = ~new_dates.isin(existing_set)
+            df = df[mask].copy()
+            after_rows = len(df)
+
+            logger.info(
+                "freq='ME' 去重：item=%s, subitem=%s，原本 %d 列，移除 %d 列（date 已存在於 DB），保留 %d 列。",
+                item,
+                subitem,
+                before_rows,
+                before_rows - after_rows,
+                after_rows,
+            )
+
+            if df.empty:
+                logger.info(
+                    "freq='ME'：item=%s, subitem=%s，本次所有 date 已存在 DB，略過寫入。",
+                    item,
+                    subitem,
+                )
+                return
+
+    # ---- 實際寫入 ----
     try:
         if partition_by_date:
+            # 理論上 freq='ME' 不會走到這裡，這裡保留原始邏輯
             dbi.write_partition(
                 df,
                 convert_mode=convert_mode,
@@ -673,6 +730,7 @@ def _write_to_db(
             )
 
     except Exception as e:
+        global DEBUG_LAST_DF, DEBUG_LAST_CONTEXT
         DEBUG_LAST_DF = df
         conflict = getattr(dbi, "schema_conflict", None)
         try:
@@ -697,8 +755,6 @@ def _write_to_db(
         if conflict:
             logger.debug(f"[DB schema conflict] {conflict}")
         raise
-        # === 照你的策略：遇錯就停 ===
-
 
 
 # ---- 清洗一個檔案（主流程子步驟） ----
