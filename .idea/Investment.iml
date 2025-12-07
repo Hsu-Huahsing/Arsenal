@@ -3,8 +3,8 @@
   <component name="NewModuleRootManager">
     <content url="file://$MODULE_DIR$" />
     <content url="file://$MODULE_DIR$/../StevenTricks" />
+    <content url="file://$MODULE_DIR$/../WageBound" />
     <orderEntry type="jdk" jdkName="stock" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
-    <orderEntry type="module" module-name="WageBound" />
   </component>
 </module>
