@@ -62,25 +62,22 @@ from datetime import datetime
 import pandas as pd
 
 # ---- StevenTricks 與 config ----
-from StevenTricks.io.file_utils import pickleio
-from StevenTricks.io.file_utils import PathWalk_df
-
+from StevenTricks.io.file_utils import pickleio, PathWalk_df
 from StevenTricks.core.convert_utils import safe_replace, safe_numeric_convert, stringtodate, keyinstr
 from StevenTricks.db.internal_db import DBPkl
-
-from config.conf import collection, fields_span, dropcol, key_set
-from config.col_rename import colname_dic, transtonew_col
-from config.col_format import numericol, datecol
 from config.paths import (
+    dbpath_source as CLOUD_DBPATH_SOURCE,
+    dbpath_cleaned as CLOUD_DBPATH_CLEANED,
+    dbpath_cleaned_log as CLOUD_DBPATH_CLEANED_LOG,
     db_local_root,
-)
-# ---- 雲端 / 本機 路徑快取 ----
-# 一開始載入時，config.paths 的 db_root 指向「雲端」，所以這三個就是雲端路徑
-CLOUD_DBPATH_SOURCE = dbpath_source
-CLOUD_DBPATH_CLEANED = dbpath_cleaned
-CLOUD_DBPATH_CLEANED_LOG = dbpath_cleaned_log
+    )
 
-# 本機根目錄（config.paths.path_dic["stock_twse_db"]["db_local"]）
+# active 變數：一開始指向「雲端」，之後會依 storage_mode 被切到 local / staging
+dbpath_source = CLOUD_DBPATH_SOURCE
+dbpath_cleaned = CLOUD_DBPATH_CLEANED
+dbpath_cleaned_log = CLOUD_DBPATH_CLEANED_LOG
+
+# 本機根目錄（config.paths.db_local_root）
 LOCAL_DB_ROOT = db_local_root
 LOCAL_DBPATH_SOURCE = LOCAL_DB_ROOT / "source"
 LOCAL_DBPATH_CLEANED = LOCAL_DB_ROOT / "cleaned"
@@ -116,6 +113,10 @@ JOB_STATE_COLUMNS = [
     "item",              # item（例如 三大法人買賣超日報）
     "last_processed_at", # 我們成功/失敗寫入 DB 的時間
 ]
+
+from config.conf import collection, fields_span, dropcol, key_set
+from config.col_rename import colname_dic, transtonew_col
+from config.col_format import numericol, datecol
 
 def _calc_file_state(path: str) -> Dict[str, Any]:
     """
@@ -233,7 +234,7 @@ class DataCleanError(RuntimeError):
 
 
 # ---- 小工具 ----
-def _ensure_dir(p: str) -> None:
+def _ensure_dir(p) -> None:
     makedirs(p, exist_ok=True)
 
 
@@ -244,7 +245,7 @@ def _normalize_cols(cols: List[str]) -> List[str]:
     return cleaned
 
 
-def _list_source_pickles(root: str) -> pd.DataFrame:
+def _list_source_pickles(root) -> pd.DataFrame:
     """
     列出 root 下所有 .pkl 檔；回傳 DataFrame 包含 columns: file, path, dir（上層資料夾名）
     優先用 StevenTricks.PathWalk_df
@@ -345,18 +346,15 @@ def _upsert_job_state_row(
         )
         row.update(state)
 
-        # 👇 修正這裡，避免「空 DataFrame + concat」造成 FutureWarning
         row_df = pd.DataFrame([row], columns=JOB_STATE_COLUMNS)
 
         if job_state.empty:
-            # 第一次直接用 row_df 當起始 job_state
             job_state = row_df
         else:
-            # 後續才用 concat 疊上去
             job_state = pd.concat([job_state, row_df], ignore_index=True)
 
     else:
-        # 更新既有紀錄（原來這段保持不動）
+        # 更新既有紀錄
         for k, v in state.items():
             if k in job_state.columns:
                 job_state.loc[idx, k] = v
@@ -619,7 +617,6 @@ def _write_to_db(
                 logical_table_name=subitem,
             )
 
-
             try:
                 dbi.write_partition(
                     df_chunk,
@@ -628,7 +625,6 @@ def _write_to_db(
                     primary_key=(pk if pk else None),
                 )
             except Exception as e:
-                # debug 區塊照舊，但注意用 table_name
                 global DEBUG_LAST_DF, DEBUG_LAST_CONTEXT
                 DEBUG_LAST_DF = df_chunk
                 conflict = getattr(dbi, "schema_conflict", None)
@@ -658,10 +654,8 @@ def _write_to_db(
         # 分桶模式下，這個函式到這裡就結束，不再走下面的「單一表」邏輯
         return
 
-
     # ---- ★ 否則維持原本單一表行為 ----
     dbi = DBPkl(db_path, subitem, logical_table_name=subitem)
-
 
     try:
         if partition_by_date:
@@ -679,8 +673,6 @@ def _write_to_db(
             )
 
     except Exception as e:
-        # 原本 debug 區塊原封不動
-
         DEBUG_LAST_DF = df
         conflict = getattr(dbi, "schema_conflict", None)
         try:
@@ -1101,19 +1093,18 @@ def process_twse_data(
         return
 
     # B-2：雲端 + 本機 staging（你原本的 use_local_db_staging=True 模式）
-    # 等同以前的程式，但邏輯搬到這裡而且更明確
     if batch_size is None:
         batch_size = 10_000_000  # 一次清到底
 
     target_cleaned: Path = CLOUD_DBPATH_CLEANED
-    staging_root: Path = db_local_root
+    staging_root: Path = LOCAL_DB_ROOT
 
     batch_no = 0
     while True:
         batch_no += 1
         logger.info("===== 開始 staging batch %d，batch_size=%d =====", batch_no, batch_size)
 
-        # staging_path 會：
+        # staging_path：
         # 1) 把「雲端 cleaned」整個複製到 staging_root 下某個 staging_xxx/cleaned 資料夾
         # 2) yield 本機 cleaned 的路徑
         # 3) 離開 with 時把本機結果同步回雲端，並把 staging_xxx 刪掉
@@ -1195,25 +1186,3 @@ def main(argv: Optional[List[str]] = None) -> None:
 if __name__ == "__main__":
     # 讓 _parse_args 自己去處理 sys.argv（含 PyCharm 的垃圾參數）
     main()
-#
-# raw = {
-#     "fields": ["A","B"],
-#     "data": [[1,2]],
-#     "title": "主表",
-#     "groups": None,
-#     "tables": [
-#         {"fields1": ["X","Y"], "data1": [[9,8]], "subtitle": "子表一"},
-#         {"creditFields": ["C1","C2"], "creditList": [[3,4]], "creditTitle": "信用表"},
-#     ],
-# }
-# # 你的 key_set 如題
-# lst = key_extract(raw)
-# for i, d in enumerate(lst, 1):
-#     print(i, d.keys())  # 應能看到 fields/data/title/groups/notes 等鍵依規則被抽出
-#
-#
-#
-#
-# raw = pickleio(path=r"/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock/twse/source/三大法人買賣超日報/三大法人買賣超日報_2023-09-25.pkl", mode="load")
-# raw1 = pickleio(path=r"/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock/twse/cleaned/三大法人買賣超日報/三大法人買賣超日報.pkl", mode="load")
-# raw2 = pickleio(path=r"/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock/twse/cleaned/三大法人買賣超日報/三大法人買賣超日報_schema.pkl", mode="load")
