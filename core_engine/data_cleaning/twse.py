@@ -65,8 +65,7 @@ import pandas as pd
 from StevenTricks.io.file_utils import pickleio
 from StevenTricks.io.file_utils import PathWalk_df
 
-from StevenTricks.core.convert_utils import safe_replace, safe_numeric_convert, stringtodate
-from StevenTricks.core.dict_utils import keyinstr
+from StevenTricks.core.convert_utils import safe_replace, safe_numeric_convert, stringtodate, keyinstr
 from StevenTricks.db.internal_db import DBPkl
 
 from config.conf import collection, fields_span, dropcol, key_set

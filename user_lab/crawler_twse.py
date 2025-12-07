@@ -75,6 +75,9 @@ def run_symbol(symbol: str, days: int = 90) -> None:
 # ---------------------------------------------------------------------------
 # 3. 直接當腳本跑時，支援簡單的 CLI 參數
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# 3. 直接當腳本跑時，支援簡單的 CLI 參數
+# ---------------------------------------------------------------------------
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="TWSE 爬蟲（user_lab 入口）")
@@ -94,17 +97,23 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=90,
         help="搭配 --symbol 使用，預設 90 天",
     )
-    return parser.parse_args(argv)
+    # 保留 parse_known_args，避免未來在特殊環境被奇怪參數搞爆
+    args, _ = parser.parse_known_args(argv)
+    return args
 
 
 if __name__ == "__main__":
-    args = _parse_args()
+    # 不再看 len(sys.argv)，而是看「有沒有有效參數」
+    args = _parse_args(sys.argv[1:])
 
     if args.update:
+        # 明確指定 --update
         run_update()
     elif args.symbol:
+        # 明確指定 --symbol / --days
         run_symbol(args.symbol, days=args.days)
     else:
-        print("請使用 --update 或 --symbol / --days，例如：")
-        print("  python crawler_twse.py --update")
-        print("  python crawler_twse.py --symbol 2330 --days 90")
+        # ❗沒有任何有效參數（包含 PyCharm 幫你塞的 --mode/--host/--port）→ 一律預設跑全更新
+        print("未提供有效參數，預設執行 run_update()：更新所有 TWSE 資料...")
+        run_update()
+
