@@ -165,50 +165,41 @@ class CrawlerTask:
             pickleio(data=self.cfg.errorlog, path=self.cfg.dbpath_errorlog, mode="save")
             logger.info("已儲存 log 至硬碟，程序中止。")
             sys.exit(1)
-
-
-
         except Exception as e:
+            # 注意：requests 可能在 post 前就出錯，所以 res 不一定存在
+            resp_obj = locals().get("res", None)
 
-            # resp 有可能在 try 之前就沒定義，所以用 getattr 保險一下
-
-            resp_obj = locals().get("resp", None)
-
-            error = {
-
-                "error_reason": classify_error(e, resp_obj),
-
-                "error_message": str(e),
-
+            errordic = {
+                "crawlerdic": crawlerdic,
+                "request": resp_obj,
                 "requeststatus": getattr(resp_obj, "status_code", None),
 
+                # 新欄位：標準化錯誤資訊
+                "error_reason": classify_error(e, resp_obj),
+                "error_message": str(e),
                 "exception_type": type(e).__name__,
-
                 "log_time": datetime.datetime.now(),
 
+                # 若你想保留舊版欄位也可以順便加進來：
+                # "errormessage1": "request_error",
+                # "errormessage2": str(e),
+                # "errormessage3": "",
             }
 
-            # 原本你怎麼寫進 errorlog.pkl，就照舊呼叫
+            # log 標記：這筆任務是「request error」（你可改你喜歡的字串）
+            self.cfg.log.loc[self.cfg.log.index == key, col] = "request error"
 
-            # 例如：
-
-            # log_maintainer.append(item=item_name, error=error)
-
-            # 將錯誤細節以物件形式存入 errorlog 的該日期欄位 (使用 list 包裝以存入 DataFrame)
-
+            # 寫入 errorlog（用 list 包住以保持跟舊版結構一致）
             self.cfg.errorlog.loc[key, col] = [errordic]
 
-            # 儲存 log/errorlog 狀態
-
+            # 儲存 log / errorlog 狀態
             pickleio(data=self.cfg.log, path=self.cfg.dbpath_log, mode="save")
-
             pickleio(data=self.cfg.errorlog, path=self.cfg.dbpath_errorlog, mode="save")
 
-            # 發生錯誤時適當延長休眠時間再繼續，以免持續碰撞相同錯誤
-
+            # 發生錯誤時適當延長休眠時間，以免一直撞同樣錯誤
             self.cfg.sleepteller(mode="long")
 
-            return  # 此筆任務終止，但迴圈可繼續下一筆
+            return  # 此筆任務終止，但主迴圈可以繼續跑下一筆
 
         # 處理 HTTP 回應代碼
         if res.status_code == self.cfg.request_module.codes.ok:
