@@ -247,6 +247,106 @@ class DataCleanError(RuntimeError):
 
 
 # ---- 小工具 ----
+import unicodedata
+from typing import Any, List
+from config.conf import collection  # 你本來就有這個
+
+def _match_subtitle_from_conf_by_contains(
+    *,
+    item: str,
+    raw_title: Any,
+    file_name: str,
+) -> str:
+    """
+    使用 Arsenal/config/conf.collection[item]['subtitle']
+    以「子字串 in 原始 title」做唯一匹配。
+
+    規則：
+    - raw_title 保持「rename 之前」的原始字串（例如 '098年05月27日 每日收盤行情(全部)'）。
+    - 對於 collection[item]['subtitle'] 中的每一個 subtitle s：
+        若 s 出現在 raw_title 裡（經過 NFKC + strip 正規化後），則視為一個候選。
+    - 結果：
+        - 剛好一個候選 → OK，回傳這個 subtitle（config 裡的原始文字）。
+        - 0 個候選       → DataCleanError（配對不到，視為設定/資料有問題）。
+        - 多於一個候選   → DataCleanError（無法唯一判定，config 太模糊）。
+    """
+    # === 1. 基本檢查 ===
+    if raw_title is None:
+        raise DataCleanError(
+            "子表標題為 None，無法與 collection.subtitle 配對",
+            file=file_name,
+            item=item,
+            value={"raw_title": raw_title},
+        )
+
+    title_norm = unicodedata.normalize("NFKC", str(raw_title)).strip()
+    if not title_norm:
+        raise DataCleanError(
+            "子表標題為空字串，無法與 collection.subtitle 配對",
+            file=file_name,
+            item=item,
+            value={"raw_title": raw_title},
+        )
+
+    cfg = collection.get(item) or {}
+    subtitles_conf = cfg.get("subtitle")
+
+    # config 裡沒定義 subtitle → 直接視為錯誤
+    if not subtitles_conf:
+        raise DataCleanError(
+            "config.collection[item]['subtitle'] 未設定或為空，無法判定子表",
+            file=file_name,
+            item=item,
+            value={
+                "raw_title": raw_title,
+                "title_norm": title_norm,
+            },
+        )
+
+    if isinstance(subtitles_conf, str):
+        subtitles_conf = [subtitles_conf]
+
+    # === 2. 逐一用「in」做 substring 匹配 ===
+    hits: List[str] = []
+    for s in subtitles_conf:
+        s_norm = unicodedata.normalize("NFKC", str(s)).strip()
+        if not s_norm:
+            continue
+        # ★ 核心：用 "subtitle in 原始標題" 來判斷
+        if s_norm in title_norm:
+            hits.append(s)
+
+    # === 3. 依照命中數量決定結果 ===
+    if len(hits) == 1:
+        # 回傳 config 裡的原始 subtitle（例如 '每日收盤行情(全部)'）
+        return hits[0]
+
+    if len(hits) == 0:
+        # 你要求：配對不到就報錯
+        raise DataCleanError(
+            "子表標題在 collection[item]['subtitle'] 中完全配對不到",
+            file=file_name,
+            item=item,
+            value={
+                "raw_title": raw_title,
+                "title_norm": title_norm,
+                "subtitle_list": list(subtitles_conf),
+            },
+        )
+
+    # len(hits) > 1：你要求：配對大於一個也要報錯
+    raise DataCleanError(
+        "子表標題在 collection[item]['subtitle'] 中配對到多個候選，無法唯一判定",
+        file=file_name,
+        item=item,
+        value={
+            "raw_title": raw_title,
+            "title_norm": title_norm,
+            "candidates": hits,
+        },
+    )
+
+
 def _ensure_dir(p) -> None:
     makedirs(p, exist_ok=True)
 
@@ -829,17 +929,23 @@ def _process_one_file(
         if not fields or not data:
             logger.debug(f"略過子表（無資料）：title={title!r}")
             continue
+        # 1️⃣ 用 collection[item]['subtitle'] + 原始 title 做唯一 substring 匹配
+        subitem_raw = _match_subtitle_from_conf_by_contains(
+            item=parentdir,      # 這裡的 parentdir 就是 collection 的 key，如 "每日收盤行情"
+            raw_title=title,     # 完全未 rename 的原始標題，例如 '098年05月27日 每日收盤行情(全部)'
+            file_name=file_name,
+        )
 
-        # 標準化子表名稱
-        subitem = keyinstr(title, dic=colname_dic, lis=subtitle_allowed, default=str(title) if title is not None else parentdir)
+        # 2️⃣ 用 colname_dic 把「subtitle 原文字」轉成標準 subitem 名稱
+        #    例如： '每日收盤行情(全部)' → '每日收盤行情'
+        subitem = colname_dic.get(subitem_raw, subitem_raw)
 
-        # 非預期子表：跳過（不是錯誤）
-        if subitem not in subtitle_allowed:
-            logger.debug(f"略過子表（不在允許清單）：title={title!r}, 標準名={subitem!r}")
-            continue
-
-        logger.debug(f"清理子表：{subitem}（原 title={title!r}）")
-
+        logger.debug(
+            "清理子表：%s（原 title=%r, matched subtitle=%r）",
+            subitem,
+            title,
+            subitem_raw,
+        )
         # 組裝 DataFrame（群組 or 平面）
         try:
             span_cfg = _get_span_cfg(parentdir, subitem)

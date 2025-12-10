@@ -30,3 +30,33 @@ from StevenTricks.core.convert_utils import _parse_single_date  # 名稱照你�
 
 a = _parse_single_date("110/06/01",mode=5)
 b = _parse_single_date("113/12/05")
+
+
+from pathlib import Path
+import pandas as pd
+import pprint
+
+src_root = Path("/Users/stevenhsu/Library/Mobile Documents/com~apple~CloudDocs/warehouse/stock/twse/source")
+item_dir = src_root / "每日收盤行情"
+p = item_dir / "每日收盤行情_2008-04-10.pkl"
+
+raw = pd.read_pickle(p)  # 這個應該是 dict
+
+print("keys =", list(raw.keys()))
+
+# 看看 groups9 裡有什麼（通常會是一組 group 定義＋標題）
+print("\n=== groups9 ===")
+pprint.pp(raw.get("groups9"))
+
+# 看 data7 / fields7 / subtitle7
+print("\n=== subtitle7 ===")
+print(raw.get("subtitle7"))
+print("\nfields7 =", raw.get("fields7"))
+print("\n第一列 data7：")
+print(raw.get("data7")[0] if raw.get("data7") else None)
+
+print("\n=== subtitle8 ===")
+print(raw.get("subtitle8"))
+print("\nfields8 =", raw.get("fields8"))
+print("\n第一列 data8：")
+print(raw.get("data8")[0] if raw.get("data8") else None)
