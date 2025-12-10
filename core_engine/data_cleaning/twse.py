@@ -117,6 +117,46 @@ JOB_STATE_COLUMNS = [
 from config.conf import collection, fields_span, dropcol, key_set
 from config.col_rename import colname_dic, transtonew_col
 from config.col_format import numericol, datecol
+import re
+
+def _extract_legacy_subtables(raw: dict) -> list[dict]:
+    """
+    針對舊版 TWSE 結構：只要看到 fieldsN / dataN / subtitleN 就組成一個「子表」。
+    不依賴 config，也不管 groupsN 先不處理，讓後續清理邏輯自己決定怎麼用。
+
+    回傳格式：
+        [
+            {"idx": 7, "title": subtitle7, "fields": fields7, "data": data7},
+            {"idx": 8, "title": subtitle8, "fields": fields8, "data": data8},
+            ...
+        ]
+    """
+    subtables: list[dict] = []
+
+    for key in raw.keys():
+        m = re.match(r"^fields(\d+)$", key)
+        if not m:
+            continue
+        idx = int(m.group(1))
+
+        fields = raw.get(f"fields{idx}")
+        data = raw.get(f"data{idx}")
+        title = raw.get(f"subtitle{idx}")
+
+        # 沒欄位或沒資料的就跳過
+        if not fields or not data:
+            continue
+
+        subtables.append(
+            {
+                "idx": idx,
+                "title": title,
+                "fields": fields,
+                "data": data,
+            }
+        )
+
+    return subtables
 
 def _calc_file_state(path: str) -> Dict[str, Any]:
     """
@@ -899,28 +939,25 @@ def _process_one_file(
     # 取所有子表（title, fields, data）
     sub_tables = key_extract(raw)
 
-    # 如果完全抓不到子表，先判斷是「沒資料日」還是「格式異常」
+    # 如果正常路線沒抓到任何子表，啟動 legacy fallback：用 fieldsN/dataN/subtitleN 硬掃一遍
     if not sub_tables:
-        stat_msg = raw.get("stat") or raw.get("note") or ""
-
-        # 典型情況：TWSE 回傳「很抱歉，沒有符合條件的資料!」或類似字眼
-        if isinstance(stat_msg, str) and (
-            "沒有符合條件的資料" in stat_msg or
-            "查無資料" in stat_msg
-        ):
+        legacy_subs = _extract_legacy_subtables(raw)
+        if legacy_subs:
             logger.warning(
-                f"略過檔案（該日無資料）：file={file_name}, item={parentdir}, stat={stat_msg!r}"
+                "未依 config 找到子表，改用 legacy fieldsN/dataN 掃描方式：file=%s, item=%s, legacy_subtitles=%r",
+                file_name,
+                parentdir,
+                [s.get("title") for s in legacy_subs],
             )
-            # 這邊直接當作「空資料日」，讓流程繼續跑其他檔案
-            return date_key, parentdir, file_name
-
-        # 其他情況 → 真的找不到資料表，維持原本嚴格錯誤策略
-        raise DataCleanError(
-            "未找到任何可清理的子表",
-            file=file_name,
-            item=parentdir,
-            value=list(raw.keys()),  # 多給你 raw 的 key 幫助之後 debug
-        )
+            sub_tables = legacy_subs
+        else:
+            # 連 legacy 也沒有，才真的視為錯誤
+            raise DataCleanError(
+                "未找到任何可清理的子表",
+                file=file_name,
+                item=parentdir,
+                value=list(raw.keys()),
+            )
 
     for idx, d in enumerate(sub_tables, 1):
         title = d.get("title")
@@ -1345,5 +1382,14 @@ def main(argv: Optional[List[str]] = None) -> None:
 
 
 if __name__ == "__main__":
-    # 讓 _parse_args 自己去處理 sys.argv（含 PyCharm 的垃圾參數）
-    main()
+    # 給 CLI 用的入口：如果你是用 `python -m data_cleaning.twse ...`，
+    # 就讓 argparse 去解析參數
+    # main()
+
+    # 給你平常「直接執行這個檔案」用的預設參數版本：
+    process_twse_data(
+        cols=None,                 # None = 所有 item 都清
+        storage_mode="cloud_staging",
+        batch_size=500,            # 每輪最多處理 500 個檔
+        bucket_mode="all",         # 要分年就改 "year"
+    )
