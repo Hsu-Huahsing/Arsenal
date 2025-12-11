@@ -59,8 +59,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
 
+import time
 import pandas as pd
-
+import shutil
 # ---- StevenTricks 與 config ----
 from StevenTricks.io.file_utils import pickleio, PathWalk_df
 from StevenTricks.core.convert_utils import safe_replace, safe_numeric_convert, stringtodate, keyinstr
@@ -84,6 +85,50 @@ LOCAL_DBPATH_CLEANED = LOCAL_DB_ROOT / "cleaned"
 LOCAL_DBPATH_CLEANED_LOG = LOCAL_DBPATH_CLEANED / "log.pkl"
 
 from StevenTricks.io.staging import staging_path
+
+
+def _clear_local_paths() -> None:
+    """
+    LOCAL 模式專用：
+    在啟動前清空 db_local_root 底下的 source/、cleaned/ 與本機 log.pkl。
+    """
+    targets = [LOCAL_DBPATH_SOURCE, LOCAL_DBPATH_CLEANED]
+    for p in targets:
+        try:
+            if p.exists():
+                shutil.rmtree(p)
+                logger.info("已清空本機目錄：%s", p)
+        except Exception as e:
+            logger.warning("清空本機目錄失敗：%s (%s)", p, e)
+
+    try:
+        if LOCAL_DBPATH_CLEANED_LOG.exists():
+            LOCAL_DBPATH_CLEANED_LOG.unlink()
+            logger.info("已刪除本機 job_state log：%s", LOCAL_DBPATH_CLEANED_LOG)
+    except Exception as e:
+        logger.warning("刪除本機 job_state log 失敗：%s (%s)", LOCAL_DBPATH_CLEANED_LOG, e)
+
+
+def _clear_staging_dirs(staging_root: Path) -> None:
+    """
+    cloud_staging 模式專用：
+    先把 staging_root 底下舊的 staging_* 目錄清掉
+    （例如 staging_cleaned），避免沿用上一次中斷留下的殘骸。
+    """
+    if not staging_root.exists():
+        return
+
+    for sub in staging_root.iterdir():
+        if not sub.is_dir():
+            continue
+        # 目前 staging_path 預設會建立類似 staging_cleaned 這種目錄
+        if sub.name.startswith("staging_"):
+            try:
+                shutil.rmtree(sub)
+                logger.info("已清除舊 staging 目錄：%s", sub)
+            except Exception as e:
+                logger.warning("清除 staging 目錄失敗：%s (%s)", sub, e)
+
 
 DEBUG_LAST_DF: Optional[pd.DataFrame] = None
 DEBUG_LAST_CONTEXT: Dict[str, Any] = {}
@@ -910,9 +955,15 @@ def _process_one_file(
     parentdir = Path(file_path).parent.name  # 作為 item
     logger.info(f"處理檔案：{file_name}（類別={parentdir}）")
 
+    # === Timer: 整個檔案處理開始時間 ===
+    t0 = time.perf_counter()
+
+    # ---- 讀取 raw pkl ----
     raw = pickleio(path=file_path, mode="load")
     if not isinstance(raw, dict):
         raise DataCleanError("原始 pkl 非 dict 結構", file=file_name)
+
+    t1 = time.perf_counter()   # ★ 讀取結束時間
 
     base, _ = splitext(file_name)
 
@@ -923,7 +974,6 @@ def _process_one_file(
         raise DataCleanError("無法取得 crawler 日期", file=file_name, item=parentdir, value=raw.get("crawlerdic")) from e
 
     # 決定允許的子表（標準化後）
-    # 以 crawler 的 subtitle 優先，否則取 config.collection[item]['subtitle']
     subtitle_from_crawler = raw.get("crawlerdic",{}).get("subtitle")
     if isinstance(subtitle_from_crawler, list) and subtitle_from_crawler:
         subtitle_allowed = [colname_dic.get(x, x) for x in subtitle_from_crawler]
@@ -936,10 +986,11 @@ def _process_one_file(
             f"file={file_name}, item={parentdir}. "
             f"請檢查 crawlerdic.subtitle 或 config.collection['{parentdir}']['subtitle']"
         )
+
     # 取所有子表（title, fields, data）
     sub_tables = key_extract(raw)
 
-    # 如果正常路線沒抓到任何子表，啟動 legacy fallback：用 fieldsN/dataN/subtitleN 硬掃一遍
+    # 如果正常路線沒抓到任何子表，啟動 legacy fallback
     if not sub_tables:
         legacy_subs = _extract_legacy_subtables(raw)
         if legacy_subs:
@@ -951,13 +1002,16 @@ def _process_one_file(
             )
             sub_tables = legacy_subs
         else:
-            # 連 legacy 也沒有，才真的視為錯誤
             raise DataCleanError(
                 "未找到任何可清理的子表",
                 file=file_name,
                 item=parentdir,
                 value=list(raw.keys()),
             )
+
+    # === Timer: 累計清理 / 寫入時間 ===
+    clean_time_total = 0.0
+    write_time_total = 0.0
 
     for idx, d in enumerate(sub_tables, 1):
         title = d.get("title")
@@ -966,15 +1020,13 @@ def _process_one_file(
         if not fields or not data:
             logger.debug(f"略過子表（無資料）：title={title!r}")
             continue
-        # 1️⃣ 用 collection[item]['subtitle'] + 原始 title 做唯一 substring 匹配
+
         subitem_raw = _match_subtitle_from_conf_by_contains(
-            item=parentdir,      # 這裡的 parentdir 就是 collection 的 key，如 "每日收盤行情"
-            raw_title=title,     # 完全未 rename 的原始標題，例如 '098年05月27日 每日收盤行情(全部)'
+            item=parentdir,
+            raw_title=title,
             file_name=file_name,
         )
 
-        # 2️⃣ 用 colname_dic 把「subtitle 原文字」轉成標準 subitem 名稱
-        #    例如： '每日收盤行情(全部)' → '每日收盤行情'
         subitem = colname_dic.get(subitem_raw, subitem_raw)
 
         logger.debug(
@@ -983,7 +1035,9 @@ def _process_one_file(
             title,
             subitem_raw,
         )
-        # 組裝 DataFrame（群組 or 平面）
+
+        # === Timer: 清理這個子表的時間 ===
+        t_clean_start = time.perf_counter()
         try:
             span_cfg = _get_span_cfg(parentdir, subitem)
 
@@ -992,28 +1046,47 @@ def _process_one_file(
             else:
                 df0 = frameup_safe({"fields": fields, "data": data})
 
-            # 最終規範化（drop/rename/numeric/date）
             df1 = finalize_dataframe(df0, item=parentdir, subitem=subitem, date_key=date_key)
 
         except DataCleanError:
-            # 直接往外拋（你規定遇錯中斷）
             raise
         except Exception as e:
-            # 包裝成 DataCleanError，附加更多上下文
             raise DataCleanError(
                 "子表清理失敗",
                 file=file_name, item=parentdir, subitem=subitem, date=date_key,
                 hint="請檢查 fields_span/dropcol/transtonew_col/numericol/datecol 與原始資料是否一致",
             ) from e
+        t_clean_end = time.perf_counter()
+        clean_time_total += (t_clean_end - t_clean_start)
 
-        # 寫入 DB（每個子表一張表）
+        # === Timer: 寫入這個子表的時間 ===
+        t_write_start = time.perf_counter()
         _write_to_db(
             df1,
             item=parentdir,
             subitem=subitem,
             bucket_mode=bucket_mode,
         )
+        t_write_end = time.perf_counter()
+        write_time_total += (t_write_end - t_write_start)
+
+    # === 整個檔案處理結束時間 ===
+    t_end = time.perf_counter()
+
+    read_time = t1 - t0
+    total_time = t_end - t0
+
+    logger.info(
+        "檔案耗時統計：%s | read=%.2fs, clean=%.2fs, write=%.2fs, total=%.2fs",
+        file_name,
+        read_time,
+        clean_time_total,
+        write_time_total,
+        total_time,
+    )
+
     return date_key, parentdir, file_name
+
 
 
 # ---- 清洗流程（可被 import 呼叫） ----
@@ -1237,6 +1310,9 @@ def process_twse_data(
 
     # ---------- 情境 A：完全本機模式 ----------
     if storage_mode == "local":
+        # ★ 先把本機 local_path 清乾淨，避免殘留舊測試資料
+        logger.info("LOCAL 模式啟動，先清空本機 db_local_root：%s", LOCAL_DB_ROOT)
+        _clear_local_paths()
         # 切換成「本機」路徑
         dbpath_source = LOCAL_DBPATH_SOURCE
         dbpath_cleaned = LOCAL_DBPATH_CLEANED
@@ -1296,6 +1372,10 @@ def process_twse_data(
 
     target_cleaned: Path = CLOUD_DBPATH_CLEANED
     staging_root: Path = LOCAL_DB_ROOT
+
+    # ★ 每次 cloud_staging 啟動前，先把舊的 staging_* 目錄清掉
+    logger.info("cloud_staging 啟動前，先清理本機 staging 目錄（root=%s）", staging_root)
+    _clear_staging_dirs(staging_root)
 
     batch_no = 0
     while True:
