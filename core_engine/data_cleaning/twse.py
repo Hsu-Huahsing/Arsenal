@@ -9,69 +9,40 @@ TWSE 清理器：合併自 data_cleaning/cleaner_main.py + cleaning_utils.py
 - 嚴格錯誤策略：清理過程遇錯「立刻中止」，不跳過、不寫 .csv/.txt；把出錯的資料值/型別、欄位、子表、檔案等詳列，方便你立即補清理規則
 - 每個函式可單獨測試
 - 重複/冗餘邏輯已精簡（欄名歸一處理等）
-
-
-用法（CLI）
-    清理所有類別：
-        python -m data_cleaning.twse
-    只清理指定類別（資料夾名/collection key）：
-        python -m data_cleaning.twse --col 每日收盤行情 信用交易統計
-
-用法（import）
-    from data_cleaning.twse import process_twse_data, clean_one_dataframe
-    process_twse_data(["每日收盤行情"])
-    # 或單測：
-    df2 = clean_one_dataframe(df_raw, item="每日收盤行情", subitem="個股", date="2025-08-10")
-
-    from data_cleaning.twse import process_twse_data
-
-    # 清全部
-    process_twse_data()
-
-    # 或只清特定集合
-    process_twse_data(["每日收盤行情"])
-
-    import pandas as pd
-    from data_cleaning.twse import clean_one_dataframe
-
-    # 假資料：欄名會先經過 colname_dic 與 HTML 清理
-    raw = pd.DataFrame(
-        [["114/08/05", "2330", "10,000", "1,234.5"]],
-        columns=["日期", "代號", "成交股數", "收盤價</br>"]
-    )
-
-    cleaned = clean_one_dataframe(
-        raw,
-        item="每日收盤行情",
-        subitem="個股",
-        date="2025-08-10"  # 若無日期欄，會用這個補 'date'
-    )
-    print(cleaned.dtypes)
-    print(cleaned.head())
-
-
 """
 import argparse
 import logging
 from os import makedirs
-from os.path import exists, join, splitext, basename
+from os.path import exists, join, basename
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 from datetime import datetime
-
+from dataclasses import dataclass, field
 import time
+import math
+import sys
 import pandas as pd
 import shutil
+import re
+import unicodedata
+from typing import Any, List
+
 # ---- StevenTricks 與 config ----
+from config.conf import fields_span, dropcol, key_set
+from config.col_rename import colname_dic, transtonew_col
+from config.col_format import numericol, datecol
 from StevenTricks.io.file_utils import pickleio, PathWalk_df
-from StevenTricks.core.convert_utils import safe_replace, safe_numeric_convert, stringtodate, keyinstr
+from StevenTricks.core.convert_utils import safe_replace, safe_numeric_convert, stringtodate
 from StevenTricks.db.internal_db import DBPkl
 from config.paths import (
     dbpath_source as CLOUD_DBPATH_SOURCE,
     dbpath_cleaned as CLOUD_DBPATH_CLEANED,
     dbpath_cleaned_log as CLOUD_DBPATH_CLEANED_LOG,
     db_local_root,
-    )
+)
+from config.conf import collection  # 你本來就有這個
+from StevenTricks.io.staging import staging_path
+
 
 # active 變數：一開始指向「雲端」，之後會依 storage_mode 被切到 local / staging
 dbpath_source = CLOUD_DBPATH_SOURCE
@@ -84,7 +55,161 @@ LOCAL_DBPATH_SOURCE = LOCAL_DB_ROOT / "source"
 LOCAL_DBPATH_CLEANED = LOCAL_DB_ROOT / "cleaned"
 LOCAL_DBPATH_CLEANED_LOG = LOCAL_DBPATH_CLEANED / "log.pkl"
 
-from StevenTricks.io.staging import staging_path
+
+DEBUG_LAST_DF: Optional[pd.DataFrame] = None
+DEBUG_LAST_CONTEXT: Dict[str, Any] = {}
+
+# ---- Logging：預設 DEBUG ----
+_root = logging.getLogger()
+if not _root.handlers:
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+
+# ---- job_state 設計 ----
+# 統一 job_state 的欄位，不論新舊版本都走這一套
+JOB_STATE_COLUMNS = [
+    "file",              # 檔名（不含路徑）
+    "path",              # 完整路徑
+    "dir",               # 上層資料夾（TWSE 類別，例如 三大法人買賣超日報）
+    "hash",              # 檔案 fingerprint（size + mtime）
+    "source_mtime",      # 檔案最後異動時間
+    "source_size",       # 檔案大小（bytes）
+    "status",            # pending / success / failed
+    "date",              # 清到的 date_key（例如 20251121）
+    "item",              # item（例如 三大法人買賣超日報）
+    "last_processed_at", # 我們成功/失敗寫入 DB 的時間
+]
+
+
+# =========================
+# 覆蓋式進度列（避免 log 爆量）
+# =========================
+def _overwrite_line(msg: str) -> None:
+    """
+    覆蓋式輸出（不進 logger），用於大量 skip 的進度顯示，避免 log 爆量。
+    """
+    # 用 stdout，比較符合你說的「print 覆蓋」
+    sys.stdout.write("\r" + msg[:240])
+    sys.stdout.flush()
+
+def _overwrite_line_end() -> None:
+    """
+    結束覆蓋行：換行，避免後續 logger 印在同一行。
+    """
+    sys.stdout.write("\n")
+    sys.stdout.flush()
+
+
+# =========================
+# remaining 估算 / 精準判斷
+# =========================
+def _estimate_remaining_by_job_state(files_df: pd.DataFrame, job_state: pd.DataFrame) -> int:
+    """
+    快速估算剩餘待處理數（不做 os.stat，不檢查 mtime/hash 變更）。
+    規則：
+      - files_df 裡 path 不在 job_state → 視為待處理
+      - 在 job_state 但 status != success → 視為待處理
+      - status==success → 視為已處理
+    """
+    if files_df is None or files_df.empty:
+        return 0
+
+    if job_state is None or job_state.empty or "path" not in job_state.columns:
+        return int(len(files_df))
+
+    js = job_state[["path", "status"]].copy()
+    js["path"] = js["path"].astype(str)
+
+    merged = files_df[["path"]].copy()
+    merged["path"] = merged["path"].astype(str)
+
+    merged = merged.merge(js, on="path", how="left")
+    pending_mask = merged["status"].isna() | (merged["status"].astype(str) != "success")
+    return int(pending_mask.sum())
+
+
+def _calc_file_state(path: str) -> Dict[str, Any]:
+    """
+    統一取得 source 檔案的目前狀態：
+    - hash：用 size + mtime 組合而成，足夠判斷是否異動
+    - source_size：檔案大小（bytes）
+    - source_mtime：最後修改時間（pandas Timestamp）
+    """
+    p = Path(path)
+    st = p.stat()
+    size = st.st_size
+    mtime = st.st_mtime  # float（秒）
+
+    # fingerprint：size + 整數 mtime 字串
+    fp = f"{size}-{int(mtime)}"
+
+    return {
+        "hash": fp,
+        "source_size": size,
+        "source_mtime": pd.Timestamp.fromtimestamp(mtime),
+    }
+
+
+def _needs_processing_exact(file_path: str, rec: Optional[pd.Series]) -> bool:
+    """
+    精準判斷單一檔案是否需要處理（會 stat）。
+    跟 _process_twse_data_impl 裡的略過條件一致。
+    """
+    state_now = _calc_file_state(file_path)
+    fp_now = state_now["hash"]
+    mtime_now = state_now["source_mtime"]
+
+    if rec is None:
+        return True
+
+    rec_status = rec.get("status")
+    rec_hash = rec.get("hash")
+    rec_mtime = rec.get("source_mtime")
+
+    if (
+        rec_status == "success"
+        and pd.notna(rec_hash)
+        and str(rec_hash) == str(fp_now)
+        and pd.notna(rec_mtime)
+        and pd.Timestamp(rec_mtime) == mtime_now
+    ):
+        return False
+
+    return True
+
+
+def _has_any_pending_exact(files_df: pd.DataFrame, job_state: pd.DataFrame) -> bool:
+    """
+    精準掃描：任一檔案需要處理就回 True。（會 stat）
+    只在 remaining_est == 0 時呼叫一次，避免每輪都掃 6 萬次 stat。
+    """
+    if files_df is None or files_df.empty:
+        return False
+
+    js = job_state.copy() if isinstance(job_state, pd.DataFrame) else pd.DataFrame(columns=JOB_STATE_COLUMNS)
+    if js.empty or "path" not in js.columns:
+        js = pd.DataFrame(columns=JOB_STATE_COLUMNS)
+
+    rec_map: Dict[str, pd.Series] = {}
+    if not js.empty:
+        for _, r in js.iterrows():
+            rec_map[str(r.get("path"))] = r
+
+    for _, row in files_df.iterrows():
+        p = str(row["path"])
+        rec = rec_map.get(p)
+        if _needs_processing_exact(p, rec):
+            return True
+    return False
+
+
+def _ensure_dir(p) -> None:
+    makedirs(p, exist_ok=True)
 
 
 def _clear_local_paths() -> None:
@@ -121,7 +246,6 @@ def _clear_staging_dirs(staging_root: Path) -> None:
     for sub in staging_root.iterdir():
         if not sub.is_dir():
             continue
-        # 目前 staging_path 預設會建立類似 staging_cleaned 這種目錄
         if sub.name.startswith("staging_"):
             try:
                 shutil.rmtree(sub)
@@ -130,51 +254,10 @@ def _clear_staging_dirs(staging_root: Path) -> None:
                 logger.warning("清除 staging 目錄失敗：%s (%s)", sub, e)
 
 
-DEBUG_LAST_DF: Optional[pd.DataFrame] = None
-DEBUG_LAST_CONTEXT: Dict[str, Any] = {}
-
-# ---- Logging：預設 DEBUG ----
-_root = logging.getLogger()
-if not _root.handlers:
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
-
-# ---- job_state 設計 ----
-# 統一 job_state 的欄位，不論新舊版本都走這一套
-JOB_STATE_COLUMNS = [
-    "file",              # 檔名（不含路徑）
-    "path",              # 完整路徑
-    "dir",               # 上層資料夾（TWSE 類別，例如 三大法人買賣超日報）
-    "hash",              # 檔案 fingerprint（size + mtime）
-    "source_mtime",      # 檔案最後異動時間
-    "source_size",       # 檔案大小（bytes）
-    "status",            # pending / success / failed
-    "date",              # 清到的 date_key（例如 20251121）
-    "item",              # item（例如 三大法人買賣超日報）
-    "last_processed_at", # 我們成功/失敗寫入 DB 的時間
-]
-
-from config.conf import collection, fields_span, dropcol, key_set
-from config.col_rename import colname_dic, transtonew_col
-from config.col_format import numericol, datecol
-import re
-
 def _extract_legacy_subtables(raw: dict) -> list[dict]:
     """
     針對舊版 TWSE 結構：只要看到 fieldsN / dataN / subtitleN 就組成一個「子表」。
     不依賴 config，也不管 groupsN 先不處理，讓後續清理邏輯自己決定怎麼用。
-
-    回傳格式：
-        [
-            {"idx": 7, "title": subtitle7, "fields": fields7, "data": data7},
-            {"idx": 8, "title": subtitle8, "fields": fields8, "data": data8},
-            ...
-        ]
     """
     subtables: list[dict] = []
 
@@ -188,7 +271,6 @@ def _extract_legacy_subtables(raw: dict) -> list[dict]:
         data = raw.get(f"data{idx}")
         title = raw.get(f"subtitle{idx}")
 
-        # 沒欄位或沒資料的就跳過
         if not fields or not data:
             continue
 
@@ -203,27 +285,6 @@ def _extract_legacy_subtables(raw: dict) -> list[dict]:
 
     return subtables
 
-def _calc_file_state(path: str) -> Dict[str, Any]:
-    """
-    統一取得 source 檔案的目前狀態：
-    - hash：用 size + mtime 組合而成，足夠判斷是否異動
-    - source_size：檔案大小（bytes）
-    - source_mtime：最後修改時間（pandas Timestamp）
-    """
-    p = Path(path)
-    st = p.stat()
-    size = st.st_size
-    mtime = st.st_mtime  # float（秒）
-
-    # fingerprint：size + 整數 mtime 字串
-    fp = f"{size}-{int(mtime)}"
-
-    return {
-        "hash": fp,
-        "source_size": size,
-        "source_mtime": pd.Timestamp.fromtimestamp(mtime),
-    }
-
 
 def _get_span_cfg(item: str, subitem: str) -> Optional[dict]:
     """
@@ -236,6 +297,7 @@ def _get_span_cfg(item: str, subitem: str) -> Optional[dict]:
     direct  = fields_span.get(subitem)
     return by_item or direct
 
+
 def _is_partition_by_date_item(item: str) -> bool:
     """
     判斷此 item 是否為「日頻率」的日報表：
@@ -247,15 +309,13 @@ def _is_partition_by_date_item(item: str) -> bool:
     if freq is None:
         return False
 
-    # 統一成字串判斷，避免大小寫問題或 '1D' 之類寫法
     s = str(freq).strip().upper()
     if s == "D":
         return True
-    # 如果你未來想支援 '1D'、'DAY' 之類，也可以順便打開：
     if s in {"1D", "DAY", "DAILY"}:
         return True
-
     return False
+
 
 def _is_me_freq_item(item: str) -> bool:
     """
@@ -270,6 +330,7 @@ def _is_me_freq_item(item: str) -> bool:
     s = str(freq).strip().upper()
     return s == "ME"
 
+
 def _make_bucket_key(date_series: pd.Series, mode: str) -> pd.Series:
     """
     把 date 欄位轉成「bucket key」，依 mode 回傳字串 Series：
@@ -282,24 +343,19 @@ def _make_bucket_key(date_series: pd.Series, mode: str) -> pd.Series:
     mode = (mode or "all").lower()
 
     if not pd.api.types.is_datetime64_any_dtype(date_series):
-        # 防呆：如果不是 datetime，就硬轉一次
         date_series = pd.to_datetime(date_series)
 
     if mode == "year":
         return date_series.dt.strftime("%Y")
-
     if mode == "quarter":
-        # to_period('Q') 會產生類似 '2020Q1'
         return date_series.dt.to_period("Q").astype(str)
-
     if mode == "month":
         return date_series.dt.strftime("%Y-%m")
-
     if mode == "day":
         return date_series.dt.strftime("%Y-%m-%d")
 
-    # 其他（含 all）呼叫端不應進來；這裡直接給同一個 key
     return pd.Series(["ALL"] * len(date_series), index=date_series.index)
+
 
 # ---- 自訂錯誤類，讓錯誤情境更清楚 ----
 class DataCleanError(RuntimeError):
@@ -331,11 +387,6 @@ class DataCleanError(RuntimeError):
         super().__init__("".join(parts))
 
 
-# ---- 小工具 ----
-import unicodedata
-from typing import Any, List
-from config.conf import collection  # 你本來就有這個
-
 def _match_subtitle_from_conf_by_contains(
     *,
     item: str,
@@ -345,17 +396,7 @@ def _match_subtitle_from_conf_by_contains(
     """
     使用 Arsenal/config/conf.collection[item]['subtitle']
     以「子字串 in 原始 title」做唯一匹配。
-
-    規則：
-    - raw_title 保持「rename 之前」的原始字串（例如 '098年05月27日 每日收盤行情(全部)'）。
-    - 對於 collection[item]['subtitle'] 中的每一個 subtitle s：
-        若 s 出現在 raw_title 裡（經過 NFKC + strip 正規化後），則視為一個候選。
-    - 結果：
-        - 剛好一個候選 → OK，回傳這個 subtitle（config 裡的原始文字）。
-        - 0 個候選       → DataCleanError（配對不到，視為設定/資料有問題）。
-        - 多於一個候選   → DataCleanError（無法唯一判定，config 太模糊）。
     """
-    # === 1. 基本檢查 ===
     if raw_title is None:
         raise DataCleanError(
             "子表標題為 None，無法與 collection.subtitle 配對",
@@ -376,7 +417,6 @@ def _match_subtitle_from_conf_by_contains(
     cfg = collection.get(item) or {}
     subtitles_conf = cfg.get("subtitle")
 
-    # config 裡沒定義 subtitle → 直接視為錯誤
     if not subtitles_conf:
         raise DataCleanError(
             "config.collection[item]['subtitle'] 未設定或為空，無法判定子表",
@@ -391,23 +431,18 @@ def _match_subtitle_from_conf_by_contains(
     if isinstance(subtitles_conf, str):
         subtitles_conf = [subtitles_conf]
 
-    # === 2. 逐一用「in」做 substring 匹配 ===
     hits: List[str] = []
     for s in subtitles_conf:
         s_norm = unicodedata.normalize("NFKC", str(s)).strip()
         if not s_norm:
             continue
-        # ★ 核心：用 "subtitle in 原始標題" 來判斷
         if s_norm in title_norm:
             hits.append(s)
 
-    # === 3. 依照命中數量決定結果 ===
     if len(hits) == 1:
-        # 回傳 config 裡的原始 subtitle（例如 '每日收盤行情(全部)'）
         return hits[0]
 
     if len(hits) == 0:
-        # 你要求：配對不到就報錯
         raise DataCleanError(
             "子表標題在 collection[item]['subtitle'] 中完全配對不到",
             file=file_name,
@@ -419,7 +454,6 @@ def _match_subtitle_from_conf_by_contains(
             },
         )
 
-    # len(hits) > 1：你要求：配對大於一個也要報錯
     raise DataCleanError(
         "子表標題在 collection[item]['subtitle'] 中配對到多個候選，無法唯一判定",
         file=file_name,
@@ -430,10 +464,6 @@ def _match_subtitle_from_conf_by_contains(
             "candidates": hits,
         },
     )
-
-
-def _ensure_dir(p) -> None:
-    makedirs(p, exist_ok=True)
 
 
 def _normalize_cols(cols: List[str]) -> List[str]:
@@ -448,12 +478,10 @@ def _list_source_pickles(root) -> pd.DataFrame:
     列出 root 下所有 .pkl 檔；回傳 DataFrame 包含 columns: file, path, dir（上層資料夾名）
     優先用 StevenTricks.PathWalk_df
     """
-    df = PathWalk_df(root, [], ["log"], [".DS_Store","productlist"], [".pkl"])  # 依你的慣例
-    # 期待有 'file', 'path', 'dir' 欄；若沒有就補
+    df = PathWalk_df(root, [], ["log"], [".DS_Store","productlist"], [".pkl"])
     need_cols = {"file", "path", "dir"}
     have = set(df.columns)
     if not need_cols.issubset(have):
-        # 嘗試補齊
         if "path" not in df.columns:
             raise DataCleanError("PathWalk_df 缺少 path 欄")
         df["file"] = df["path"].map(lambda p: basename(p))
@@ -474,20 +502,17 @@ def _load_job_state() -> pd.DataFrame:
 
     if isinstance(obj, pd.DataFrame):
         js = obj.copy()
-        # 補齊缺少欄位
         for col in JOB_STATE_COLUMNS:
             if col not in js.columns:
                 js[col] = pd.NA
         return js[JOB_STATE_COLUMNS]
 
-    # 舊版：set/list 只記 file 名稱
     if isinstance(obj, (set, list, tuple)):
         return pd.DataFrame(
             {"file": list(map(str, obj))},
             columns=JOB_STATE_COLUMNS,
         )
 
-    # 其他未知格式：當作空
     return pd.DataFrame(columns=JOB_STATE_COLUMNS)
 
 
@@ -515,15 +540,6 @@ def _upsert_job_state_row(
 ) -> pd.DataFrame:
     """
     新增或更新一筆 job_state 紀錄（以 path 當唯一鍵）。
-
-    參數：
-      - file：檔名（不含路徑）
-      - path：完整路徑
-      - dir_name：上層資料夾名（TWSE 類別）
-      - date_key：本次清理得到的 date（若還沒拿到可給 None）
-      - item：TWSE item 名稱（例如 三大法人買賣超日報，若還沒拿到可給 None）
-      - state：要覆寫的欄位 dict，例如：
-          {"status": "pending", "hash": "...", "source_mtime": ts, ...}
     """
     if job_state.empty:
         idx = pd.Series([], dtype=bool)
@@ -531,7 +547,6 @@ def _upsert_job_state_row(
         idx = (job_state["path"] == path)
 
     if not idx.any():
-        # 新紀錄
         row = {col: pd.NA for col in JOB_STATE_COLUMNS}
         row.update(
             {
@@ -552,7 +567,6 @@ def _upsert_job_state_row(
             job_state = pd.concat([job_state, row_df], ignore_index=True)
 
     else:
-        # 更新既有紀錄
         for k, v in state.items():
             if k in job_state.columns:
                 job_state.loc[idx, k] = v
@@ -568,16 +582,11 @@ def _upsert_job_state_row(
     return job_state
 
 
-
 # ---- 解析 TWSE API 結構 → 子表 dict list ----
 def key_extract(dic: dict) -> list[dict]:
     """
     依據全域 key_set 從 raw dict 擷取多個「子表」片段 (fields/data/title/...)，
-    同時支援：
-      - step == "main1"：帶序號切片（如 fields, fields1, fields2, ...）
-      - 其他 step（如 "set1"）：一次聚合
-      - raw["tables"]：若存在且為 list，逐一用相同規則抽取
-    回傳：list[dict]，例如 [{"fields":..., "data":..., "title":..., "groups":..., "notes":...}, ...]
+    同時支援 tables。
     """
     if not isinstance(dic, dict):
         raise TypeError(f"key_extract() expects dict, got {type(dic).__name__}")
@@ -585,35 +594,26 @@ def key_extract(dic: dict) -> list[dict]:
     out: list[dict] = []
 
     def _listify(x):
-        # 設定允許寫成字串或清單；統一轉清單
         return x if isinstance(x, (list, tuple)) else [x]
 
     def _find_first_key(container: dict, aliases: list[str]) -> tuple[str, bool]:
-        """
-        在 container 裡依序找第一個存在的別名鍵；回傳 (命中的鍵名, 是否命中)
-        """
         for k in aliases:
             if k in container:
                 return k, True
         return "", False
 
     def _extract_from_container(container: dict) -> list[dict]:
-        """
-        依 key_set 規則，從單一 container (通常是 raw 或 raw 的一個 table dict) 抽出子表。
-        """
         dicts: list[dict] = []
         for step, set_i in key_set.items():
             if not isinstance(set_i, dict):
                 continue
 
             if step == "main1":
-                # 完全復刻你原本的停止條件：cnt > 1 且沒命中就停止
                 cnt = 0
                 while True:
                     curr: dict = {}
                     for key_name, alias_list in set_i.items():
                         aliases = _listify(alias_list)
-                        # cnt==0 用原名；cnt>0 用 f"{alias}{cnt}"
                         candidates = [a if cnt == 0 else f"{a}{cnt}" for a in aliases]
                         hit_key, ok = _find_first_key(container, candidates)
                         if ok:
@@ -622,13 +622,11 @@ def key_extract(dic: dict) -> list[dict]:
                     if curr:
                         dicts.append(curr)
                     elif cnt > 1:
-                        # 與原碼邏輯等價：cnt>1 且無命中 → break
                         break
 
                     cnt += 1
 
             else:
-                # 非 main1：只做一次聚合
                 curr: dict = {}
                 for key_name, alias_list in set_i.items():
                     aliases = _listify(alias_list)
@@ -640,10 +638,8 @@ def key_extract(dic: dict) -> list[dict]:
 
         return dicts
 
-    # 1) 先從 raw 本體抽
     out.extend(_extract_from_container(dic))
 
-    # 2) 若 raw 中還有 tables（多表），逐一處理
     tables = dic.get("tables")
     if isinstance(tables, list):
         for t in tables:
@@ -655,25 +651,16 @@ def key_extract(dic: dict) -> list[dict]:
 
 # ---- 兩種 DataFrame 組裝 ----
 def frameup_safe(d: Dict[str, Any]) -> pd.DataFrame:
-    """
-    無群組欄位：直接以 d['fields'] 對齊 d['data']。
-    若 data 的欄數 > fields，超出者丟棄（結構噪音），但不丟列。
-    """
     fields = list(d.get("fields",[]))
     rows = list(d.get("data",[]))
     if not fields or not rows:
         raise DataCleanError("frameup_safe：缺少 fields 或 data")
-    # 截斷每列到 len(fields)，避免野欄位
     trimmed = [r[: len(fields)] for r in rows]
     df = pd.DataFrame(trimmed, columns=_normalize_cols(fields))
     return df
 
 
 def data_cleaned_groups(d: Dict[str, Any], span_cfg: Dict[str, Any]) -> pd.DataFrame:
-    """
-    有群組欄位（如 融資/融券）：
-    span_cfg 例： {"groups": [{"prefix":"融資_", "size":5}, {"prefix":"融券_","size":5}], "index": ["日期","代號",...]}
-    """
     fields = list(d.get("fields",[]))
     rows = list(d.get("data",[]))
     if not fields or not rows:
@@ -681,7 +668,6 @@ def data_cleaned_groups(d: Dict[str, Any], span_cfg: Dict[str, Any]) -> pd.DataF
     groups = span_cfg.get("groups")
     if not groups:
         raise DataCleanError("data_cleaned_groups：span_cfg 缺少 groups")
-    # 計算每群組欄位數，產生目標欄名
     start = 0
     col_names: List[str] = []
     for g in groups:
@@ -694,14 +680,12 @@ def data_cleaned_groups(d: Dict[str, Any], span_cfg: Dict[str, Any]) -> pd.DataF
         seg_cols = [f"{prefix}{c}" for c in seg_fields]
         col_names.extend(seg_cols)
         start = end
-    # 砍尾（若 fields 比群組總長還長），或不足（補空欄）→ 皆以「不刪列」為原則
     total = len(col_names)
     trimmed = [ (r[:total] + [None] * max(0, total - len(r))) for r in rows ]
     df = pd.DataFrame(trimmed, columns=_normalize_cols(col_names))
     return df
 
 
-# ---- 最終欄位清理（drop/rename/numeric/date） ----
 def finalize_dataframe(
     df: pd.DataFrame,
     *,
@@ -709,29 +693,22 @@ def finalize_dataframe(
     subitem: str,
     date_key: str,
 ) -> pd.DataFrame:
-    """
-    依 config 規則產生最終清洗後 DataFrame；遇到未知欄位/型別問題直接丟 DataCleanError。
-    """
-    # 1) 移除不需要的欄（例如 漲跌(+/-)）
     df = df.drop(columns=dropcol, errors="ignore")
-    # 2) 欄名舊→新（細項規則）
+
     rename_cfg = transtonew_col.get(item,{}).get(subitem,{})
     if rename_cfg:
         df = df.rename(columns=rename_cfg)
-    # 3) 數值欄位轉換
+
     num_cfg = numericol.get(item,{}).get(subitem,{})
     df = safe_numeric_convert(df, num_cfg)
 
-    # 4) 若沒有任何日期欄，補一個統一 'date'
     if "date" not in df.columns:
         df.insert(0, "date", date_key)
 
-    # 5) 日期欄位轉換（若有指定 datecol）
     date_cfg = datecol.get(item,{}).get(subitem,["date"])
     try:
         df = stringtodate(df, datecol=date_cfg, mode=4)
     except Exception as e:
-        # 報出第一個壞值、型別
         bad = df
         raise DataCleanError(
             "日期欄位轉換失敗",
@@ -740,17 +717,174 @@ def finalize_dataframe(
             hint="請補充 changetype_stringtodate 規則或前置清理邏輯",
         ) from e
 
-
-    # 6) 欄位順序微整：把常見鍵放前面
     front = [c for c in ["date", "代號","名稱"] if c in df.columns]
     rest = [c for c in df.columns if c not in front]
     df = df[front + rest]
     return df
 
-# ---- 寫入資料庫 ----
+
 def _db_path_for_item(item: str) -> str:
     _ensure_dir(dbpath_cleaned)
     return join(dbpath_cleaned, f"{item}")
+
+
+# ---- DB 寫入 Buffer ----
+@dataclass
+class _PendingWrite:
+    db_path: Path
+    item: str
+    subitem: str
+    table_name: str
+    pk: List[str]
+    partition_cols: Optional[List[str]]
+    convert_mode: str
+    is_me_freq: bool
+    partition_by_date: bool
+    bucket_mode: str
+    dfs: List[pd.DataFrame] = field(default_factory=list)
+
+
+_DB_WRITE_BUFFER: Dict[Tuple[str, str], _PendingWrite] = {}
+
+
+def _enqueue_db_write(
+    df: pd.DataFrame,
+    *,
+    db_path: str,
+    item: str,
+    subitem: str,
+    table_name: str,
+    pk: List[str],
+    partition_cols: Optional[List[str]],
+    convert_mode: str,
+    is_me_freq: bool,
+    partition_by_date: bool,
+    bucket_mode: str,
+) -> None:
+    key = (str(db_path), table_name)
+
+    if key not in _DB_WRITE_BUFFER:
+        _DB_WRITE_BUFFER[key] = _PendingWrite(
+            db_path=Path(db_path),
+            item=item,
+            subitem=subitem,
+            table_name=table_name,
+            pk=list(pk) if pk else [],
+            partition_cols=list(partition_cols) if partition_cols else None,
+            convert_mode=convert_mode,
+            is_me_freq=is_me_freq,
+            partition_by_date=partition_by_date,
+            bucket_mode=bucket_mode,
+        )
+
+    pending = _DB_WRITE_BUFFER[key]
+    pending.dfs.append(df.copy())
+
+
+def _flush_db_write_buffer() -> None:
+    global DEBUG_LAST_DF, DEBUG_LAST_CONTEXT
+
+    if not _DB_WRITE_BUFFER:
+        return
+
+    for key, pending in list(_DB_WRITE_BUFFER.items()):
+        if not pending.dfs:
+            continue
+
+        df_new = pd.concat(pending.dfs, ignore_index=True)
+
+        dbi = DBPkl(
+            str(pending.db_path),
+            pending.table_name,
+            logical_table_name=pending.subitem,
+        )
+
+        pk = pending.pk if pending.pk else None
+
+        if pending.is_me_freq and "date" in df_new.columns:
+            try:
+                existing = dbi.load_db()
+            except FileNotFoundError:
+                existing = None
+            except Exception as e:
+                logger.warning(
+                    "讀取既有資料失敗，freq='ME' 將改成全量寫入：item=%s, subitem=%s, err=%s",
+                    pending.item,
+                    pending.subitem,
+                    e,
+                )
+                existing = None
+
+            if existing is not None and not existing.empty and "date" in existing.columns:
+                existing_dates = pd.to_datetime(existing["date"]).dt.normalize()
+                existing_set = set(existing_dates.unique())
+
+                new_dates = pd.to_datetime(df_new["date"]).dt.normalize()
+                before_rows = len(df_new)
+                mask = ~new_dates.isin(existing_set)
+                df_new = df_new[mask].copy()
+                after_rows = len(df_new)
+
+                logger.info(
+                    "freq='ME' 去重（flush 時執行）：item=%s, subitem=%s，原本 %d 列，移除 %d 列（date 已存在於 DB），保留 %d 列。",
+                    pending.item,
+                    pending.subitem,
+                    before_rows,
+                    before_rows - after_rows,
+                    after_rows,
+                )
+
+                if df_new.empty:
+                    logger.info(
+                        "freq='ME'：item=%s, subitem=%s，本批所有 date 已存在 DB，略過寫入。",
+                        pending.item,
+                        pending.subitem,
+                    )
+                    continue
+
+        try:
+            if pending.partition_cols:
+                dbi.write_partition(
+                    df_new,
+                    convert_mode=pending.convert_mode,
+                    partition_cols=pending.partition_cols,
+                    primary_key=pk,
+                )
+            else:
+                dbi.write_db(
+                    df_new,
+                    convert_mode=pending.convert_mode,
+                    primary_key=pk,
+                )
+
+        except Exception as e:
+            DEBUG_LAST_DF = df_new
+            conflict = getattr(dbi, "schema_conflict", None)
+            try:
+                dtypes = df_new.dtypes.astype(str).to_dict()
+            except Exception:
+                dtypes = {}
+
+            DEBUG_LAST_CONTEXT = {
+                "item": pending.item,
+                "subitem": pending.table_name,
+                "db_path": str(pending.db_path),
+                "pk": pending.pk,
+                "convert_mode": pending.convert_mode,
+                "conflict": conflict,
+                "exception_type": type(e).__name__,
+                "exception_str": str(e),
+                "columns": list(df_new.columns),
+                "shape": tuple(df_new.shape),
+                "head": df_new.head(5),
+                "dtypes": dtypes,
+            }
+            if conflict:
+                logger.debug(f"[DB schema conflict] {conflict}")
+            raise
+
+    _DB_WRITE_BUFFER.clear()
+
 
 def _write_to_db(
     df: pd.DataFrame,
@@ -758,20 +892,8 @@ def _write_to_db(
     *,
     item: str,
     subitem: str,
-    bucket_mode: str = "all",     # ★ 已有參數
+    bucket_mode: str = "all",
 ) -> None:
-    global DEBUG_LAST_DF, DEBUG_LAST_CONTEXT
-    """
-    預設 PK 規則：
-      - 同時有 '代號' 與 'date' → ['代號','date']
-      - 僅有 'date' → ['date']
-      - 否則不設 PK（交由 DBPkl 處理）
-
-    另外：
-      - 若為 freq='ME' 的表，寫入前會先讀取既有資料，只保留
-        「DB 裡還沒有的 date」再寫入，避免重複 date 觸發 PK 錯誤。
-    """
-    # ---- 推 PK ----
     pk: List[str] = []
     if "代號" in df.columns and "date" in df.columns:
         pk = ["代號", "date"]
@@ -783,17 +905,18 @@ def _write_to_db(
     db_path = _db_path_for_item(item)
 
     partition_by_date = "date" in df.columns and _is_partition_by_date_item(item)
+    is_me_freq = _is_me_freq_item(item)
 
     logger.debug(
-        "寫入 DB：%s 表=%s PK=%s partition_by_date=%s bucket_mode=%s",
+        "寫入 DB（buffer 模式）：%s 表=%s PK=%s partition_by_date=%s bucket_mode=%s is_me_freq=%s",
         db_path,
         subitem,
         pk,
         partition_by_date,
         bucket_mode,
+        is_me_freq,
     )
 
-    # ---- ★ 日頻率 + bucket_mode != all → 分桶寫入（維持原有邏輯） ----
     if partition_by_date and bucket_mode.lower() != "all":
         bucket_key = _make_bucket_key(df["date"], bucket_mode)
 
@@ -801,179 +924,78 @@ def _write_to_db(
             table_name = f"{subitem}__{b}"
 
             logger.debug(
-                "寫入分桶表：%s/%s（bucket=%s, rows=%d）",
+                "enqueue 分桶表至 buffer：%s/%s（bucket=%s, rows=%d）",
                 db_path,
                 table_name,
                 b,
                 len(df_chunk),
             )
 
-            dbi = DBPkl(
-                db_path,
-                table_name,
-                logical_table_name=subitem,
-            )
-
-            try:
-                dbi.write_partition(
-                    df_chunk,
-                    convert_mode=convert_mode,
-                    partition_cols=["date"],
-                    primary_key=(pk if pk else None),
-                )
-            except Exception as e:
-                DEBUG_LAST_DF = df_chunk
-                conflict = getattr(dbi, "schema_conflict", None)
-                try:
-                    dtypes = df_chunk.dtypes.astype(str).to_dict()
-                except Exception:
-                    dtypes = {}
-
-                DEBUG_LAST_CONTEXT = {
-                    "item": item,
-                    "subitem": table_name,
-                    "db_path": str(db_path),
-                    "pk": pk,
-                    "convert_mode": convert_mode,
-                    "conflict": conflict,
-                    "exception_type": type(e).__name__,
-                    "exception_str": str(e),
-                    "columns": list(df_chunk.columns),
-                    "shape": tuple(df_chunk.shape),
-                    "head": df_chunk.head(5),
-                    "dtypes": dtypes,
-                }
-                if conflict:
-                    logger.debug(f"[DB schema conflict] {conflict}")
-                raise
-
-        return  # 分桶模式結束
-
-    # ---- 單一表模式（包含 freq='ME' 的處理） ----
-    dbi = DBPkl(db_path, subitem, logical_table_name=subitem)
-
-    # ★ 對所有 freq='ME' 的表：只寫「DB 尚未存在的 date」
-    if _is_me_freq_item(item) and "date" in df.columns:
-        try:
-            # 這裡假設 DBPkl 有一個讀取整張表的方法叫 read_db()
-            # 如果你實作的是其他名字（例如 load_db、read），把這行對應改一下即可。
-            existing = dbi.read_db()
-        except FileNotFoundError:
-            existing = None
-        except Exception as e:
-            logger.warning(
-                "讀取既有資料失敗，freq='ME' 將改成全量寫入：item=%s, subitem=%s, err=%s",
-                item,
-                subitem,
-                e,
-            )
-            existing = None
-
-        if existing is not None and not existing.empty and "date" in existing.columns:
-            # 統一成 datetime，避免型別不一致比對不到
-            existing_dates = pd.to_datetime(existing["date"]).dt.normalize()
-            existing_set = set(existing_dates.unique())
-
-            new_dates = pd.to_datetime(df["date"]).dt.normalize()
-            before_rows = len(df)
-            mask = ~new_dates.isin(existing_set)
-            df = df[mask].copy()
-            after_rows = len(df)
-
-            logger.info(
-                "freq='ME' 去重：item=%s, subitem=%s，原本 %d 列，移除 %d 列（date 已存在於 DB），保留 %d 列。",
-                item,
-                subitem,
-                before_rows,
-                before_rows - after_rows,
-                after_rows,
-            )
-
-            if df.empty:
-                logger.info(
-                    "freq='ME'：item=%s, subitem=%s，本次所有 date 已存在 DB，略過寫入。",
-                    item,
-                    subitem,
-                )
-                return
-
-    # ---- 實際寫入 ----
-    try:
-        if partition_by_date:
-            # 理論上 freq='ME' 不會走到這裡，這裡保留原始邏輯
-            dbi.write_partition(
-                df,
-                convert_mode=convert_mode,
+            _enqueue_db_write(
+                df_chunk,
+                db_path=db_path,
+                item=item,
+                subitem=subitem,
+                table_name=table_name,
+                pk=pk,
                 partition_cols=["date"],
-                primary_key=(pk if pk else None),
-            )
-        else:
-            dbi.write_db(
-                df,
                 convert_mode=convert_mode,
-                primary_key=(pk if pk else None),
+                is_me_freq=is_me_freq,
+                partition_by_date=True,
+                bucket_mode=bucket_mode,
             )
 
-    except Exception as e:
-        DEBUG_LAST_DF = df
-        conflict = getattr(dbi, "schema_conflict", None)
-        try:
-            dtypes = df.dtypes.astype(str).to_dict()
-        except Exception:
-            dtypes = {}
+        return
 
-        DEBUG_LAST_CONTEXT = {
-            "item": item,
-            "subitem": subitem,
-            "db_path": str(db_path),
-            "pk": pk,
-            "convert_mode": convert_mode,
-            "conflict": conflict,
-            "exception_type": type(e).__name__,
-            "exception_str": str(e),
-            "columns": list(df.columns),
-            "shape": tuple(df.shape),
-            "head": df.head(5),
-            "dtypes": dtypes,
-        }
-        if conflict:
-            logger.debug(f"[DB schema conflict] {conflict}")
-        raise
+    table_name = subitem
+    partition_cols = ["date"] if partition_by_date else None
+
+    logger.debug(
+        "enqueue 單一表至 buffer：%s/%s（rows=%d, partition_cols=%s）",
+        db_path,
+        table_name,
+        len(df),
+        partition_cols,
+    )
+
+    _enqueue_db_write(
+        df,
+        db_path=db_path,
+        item=item,
+        subitem=subitem,
+        table_name=table_name,
+        pk=pk,
+        partition_cols=partition_cols,
+        convert_mode=convert_mode,
+        is_me_freq=is_me_freq,
+        partition_by_date=partition_by_date,
+        bucket_mode=bucket_mode,
+    )
 
 
 # ---- 清洗一個檔案（主流程子步驟） ----
 def _process_one_file(
     file_path: str,
     *,
-    bucket_mode: str = "all",   # ★ 新增
+    bucket_mode: str = "all",
 ) -> Tuple[str, str, str]:
-    """
-    清洗單一 .pkl 檔。
-    回傳：(date_key, item, file_name)
-    """
     file_name = basename(file_path)
-    parentdir = Path(file_path).parent.name  # 作為 item
+    parentdir = Path(file_path).parent.name
     logger.info(f"處理檔案：{file_name}（類別={parentdir}）")
 
-    # === Timer: 整個檔案處理開始時間 ===
     t0 = time.perf_counter()
 
-    # ---- 讀取 raw pkl ----
     raw = pickleio(path=file_path, mode="load")
     if not isinstance(raw, dict):
         raise DataCleanError("原始 pkl 非 dict 結構", file=file_name)
 
-    t1 = time.perf_counter()   # ★ 讀取結束時間
+    t1 = time.perf_counter()
 
-    base, _ = splitext(file_name)
-
-    # 取 crawler 取得日
     try:
         date_key = raw.get("crawlerdic",{}).get("payload",{}).get("date")
     except Exception as e:
         raise DataCleanError("無法取得 crawler 日期", file=file_name, item=parentdir, value=raw.get("crawlerdic")) from e
 
-    # 決定允許的子表（標準化後）
     subtitle_from_crawler = raw.get("crawlerdic",{}).get("subtitle")
     if isinstance(subtitle_from_crawler, list) and subtitle_from_crawler:
         subtitle_allowed = [colname_dic.get(x, x) for x in subtitle_from_crawler]
@@ -987,10 +1009,8 @@ def _process_one_file(
             f"請檢查 crawlerdic.subtitle 或 config.collection['{parentdir}']['subtitle']"
         )
 
-    # 取所有子表（title, fields, data）
     sub_tables = key_extract(raw)
 
-    # 如果正常路線沒抓到任何子表，啟動 legacy fallback
     if not sub_tables:
         legacy_subs = _extract_legacy_subtables(raw)
         if legacy_subs:
@@ -1009,7 +1029,6 @@ def _process_one_file(
                 value=list(raw.keys()),
             )
 
-    # === Timer: 累計清理 / 寫入時間 ===
     clean_time_total = 0.0
     write_time_total = 0.0
 
@@ -1036,7 +1055,6 @@ def _process_one_file(
             subitem_raw,
         )
 
-        # === Timer: 清理這個子表的時間 ===
         t_clean_start = time.perf_counter()
         try:
             span_cfg = _get_span_cfg(parentdir, subitem)
@@ -1059,7 +1077,6 @@ def _process_one_file(
         t_clean_end = time.perf_counter()
         clean_time_total += (t_clean_end - t_clean_start)
 
-        # === Timer: 寫入這個子表的時間 ===
         t_write_start = time.perf_counter()
         _write_to_db(
             df1,
@@ -1070,7 +1087,6 @@ def _process_one_file(
         t_write_end = time.perf_counter()
         write_time_total += (t_write_end - t_write_start)
 
-    # === 整個檔案處理結束時間 ===
     t_end = time.perf_counter()
 
     read_time = t1 - t0
@@ -1088,22 +1104,15 @@ def _process_one_file(
     return date_key, parentdir, file_name
 
 
-
 # ---- 清洗流程（可被 import 呼叫） ----
-
 def _process_twse_data_impl(
-            cols: Optional[List[str]] = None,
-            max_files_per_run: Optional[int] = None,# 每輪最多處理幾個「實際清理」的檔案
-            bucket_mode: str = "all",  # ★ 新增
-    ) -> int:
+    cols: Optional[List[str]] = None,
+    max_files_per_run: Optional[int] = None,
+    bucket_mode: str = "all",
+) -> int:
     """
     真正執行清理邏輯的內部函式。
-
-    回傳值：
-        本輪「實際有執行 _process_one_file」的檔案數（略過的不算）。
-
-    注意：這裡假設 dbpath_cleaned / dbpath_cleaned_log 已經是「要寫入的那個路徑」
-          （可能是 iCloud，可能是本機 staging，由外層負責決定）。
+    回傳：本輪「實際有執行 _process_one_file」的檔案數（略過的不算）。
     """
     _ensure_dir(dbpath_cleaned)
 
@@ -1113,7 +1122,6 @@ def _process_twse_data_impl(
     # 2) 列出所有 source pkl 檔
     files_df = _list_source_pickles(dbpath_source)
 
-    # 若有指定要清的類別，先過濾
     if cols:
         files_df = files_df[files_df["dir"].isin(cols)].copy()
 
@@ -1122,95 +1130,80 @@ def _process_twse_data_impl(
         logger.info("找不到任何待處理的 source 檔案。")
         return 0
 
-    logger.info(f"待檢查檔案數：{total_files}")
+    # 2.5) 清理前先估算 remaining；若為 0 → 不進入處理流程
+    remaining_est = _estimate_remaining_by_job_state(files_df, job_state)
 
-    # === 進度統計用 ===
-    processed = 0         # 本輪實際有清理幾檔
+    logger.info("待檢查檔案數：%d | remaining_est=%d", total_files, remaining_est)
+
+    if remaining_est == 0:
+        # 保險：做一次精準確認（會 stat），避免 job_state 成功但 source 其實變更
+        logger.info("remaining_est=0，進行一次精準確認（避免漏掉 source 變更）...")
+        if not _has_any_pending_exact(files_df, job_state):
+            logger.info("確認無待處理檔案 → 本輪不進處理流程。")
+            return 0
+        logger.info("精準確認：仍有待處理檔案（可能是 source 變更）→ 進入處理流程。")
+
+    processed = 0
+    skipped_unchanged = 0
     start_time = datetime.now()
 
-    # 3) 逐檔決定：略過 / 重跑
-    for scanned_idx, (_, row) in enumerate(files_df.iterrows(), start=1):
-
-        # 若有設定 max_files_per_run，且已達上限 → 提前結束本輪
-        if max_files_per_run is not None and processed >= max_files_per_run:
-            logger.info(
-                "已達本輪處理上限 %d 檔，本輪提前結束（實際處理 %d 檔，掃描到第 %d 檔 / 總檔數 %d）。",
-                max_files_per_run,
-                processed,
-                scanned_idx - 1,
-                total_files,
-            )
-            break
-
-        file_path = row["path"]
-        file_name = row["file"]
-        dir_name  = row["dir"]
-
-        # 3-1) 取得 source 當前狀態（size / mtime / hash）
-        state_now = _calc_file_state(file_path)
-        fp_now    = state_now["hash"]
-        mtime_now = state_now["source_mtime"]
-        size_now  = state_now["source_size"]
-
-        # 3-2) 找出 job_state 既有紀錄
-        rec_idx = (job_state["path"] == file_path) if not job_state.empty else pd.Series([], dtype=bool)
-        rec = job_state.loc[rec_idx].iloc[0] if rec_idx.any() else None
-
-        # 3-3) 判斷是否可以安全略過
-        if rec is not None:
-            rec_status = rec.get("status")
-            rec_hash   = rec.get("hash")
-            rec_mtime  = rec.get("source_mtime")
-
-            # status = success 且 hash/mtime 完全一致 → 當作沒變化，略過
-            if (
-                rec_status == "success"
-                and pd.notna(rec_hash)
-                and rec_hash == fp_now
-                and pd.notna(rec_mtime)
-                and pd.Timestamp(rec_mtime) == mtime_now
-            ):
-                logger.debug(f"略過檔案（source 未變更）：{file_name}")
-                continue
-
-            # status 是 success 但 hash/mtime 改變 → 防呆：改成 pending
-            if rec_status == "success" and (
-                rec_hash != fp_now
-                or (pd.notna(rec_mtime) and pd.Timestamp(rec_mtime) != mtime_now)
-            ):
-                logger.warning(
-                    "偵測到 source 在上次成功清理後有變更，標記為 pending：file=%s, old_mtime=%s, new_mtime=%s",
-                    file_name,
-                    rec_mtime,
-                    mtime_now,
+    try:
+        for scanned_idx, (_, row) in enumerate(files_df.iterrows(), start=1):
+            if max_files_per_run is not None and processed >= max_files_per_run:
+                _overwrite_line_end()
+                logger.info(
+                    "已達本輪處理上限 %d 檔，本輪提前結束（實際處理 %d 檔，掃描到第 %d 檔 / 總檔數 %d）。",
+                    max_files_per_run,
+                    processed,
+                    scanned_idx - 1,
+                    total_files,
                 )
-                job_state.loc[rec_idx, "status"] = "pending"
+                break
 
-        # 3-4) 進入清理前，先標記 pending
-        job_state = _upsert_job_state_row(
-            job_state,
-            file=file_name,
-            path=file_path,
-            dir_name=dir_name,
-            date_key=None,
-            item=None,
-            state={
-                "status": "pending",
-                "hash": fp_now,
-                "source_mtime": mtime_now,
-                "source_size": size_now,
-            },
-        )
-        _save_job_state(job_state)
+            file_path = row["path"]
+            file_name = row["file"]
+            dir_name  = row["dir"]
 
-        # 3-5) 實際執行清理
-        try:
-            date_key, item, cleaned_file_name = _process_one_file(
-                file_path,
-                bucket_mode=bucket_mode,
-            )
-        except Exception as e:
-            # 標記為 failed
+            state_now = _calc_file_state(file_path)
+            fp_now    = state_now["hash"]
+            mtime_now = state_now["source_mtime"]
+            size_now  = state_now["source_size"]
+
+            rec_idx = (job_state["path"] == file_path) if not job_state.empty else pd.Series([], dtype=bool)
+            rec = job_state.loc[rec_idx].iloc[0] if rec_idx.any() else None
+
+            if rec is not None:
+                rec_status = rec.get("status")
+                rec_hash   = rec.get("hash")
+                rec_mtime  = rec.get("source_mtime")
+
+                if (
+                    rec_status == "success"
+                    and pd.notna(rec_hash)
+                    and rec_hash == fp_now
+                    and pd.notna(rec_mtime)
+                    and pd.Timestamp(rec_mtime) == mtime_now
+                ):
+                    skipped_unchanged += 1
+                    rem = max(remaining_est - processed, 0)
+                    _overwrite_line(
+                        f"[skip] scanned {scanned_idx}/{total_files} | processed {processed} | skipped {skipped_unchanged} | remaining_est {rem}"
+                    )
+                    continue
+
+                if rec_status == "success" and (
+                    rec_hash != fp_now
+                    or (pd.notna(rec_mtime) and pd.Timestamp(rec_mtime) != mtime_now)
+                ):
+                    _overwrite_line_end()
+                    logger.warning(
+                        "偵測到 source 在上次成功清理後有變更，標記為 pending：file=%s, old_mtime=%s, new_mtime=%s",
+                        file_name,
+                        rec_mtime,
+                        mtime_now,
+                    )
+                    job_state.loc[rec_idx, "status"] = "pending"
+
             job_state = _upsert_job_state_row(
                 job_state,
                 file=file_name,
@@ -1219,7 +1212,51 @@ def _process_twse_data_impl(
                 date_key=None,
                 item=None,
                 state={
-                    "status": "failed",
+                    "status": "pending",
+                    "hash": fp_now,
+                    "source_mtime": mtime_now,
+                    "source_size": size_now,
+                },
+            )
+            _save_job_state(job_state)
+
+            # 重要：要開始真的處理前，先結束覆蓋列，避免 logger 黏在同一行
+            _overwrite_line_end()
+
+            try:
+                date_key, item, cleaned_file_name = _process_one_file(
+                    file_path,
+                    bucket_mode=bucket_mode,
+                )
+            except Exception as e:
+                job_state = _upsert_job_state_row(
+                    job_state,
+                    file=file_name,
+                    path=file_path,
+                    dir_name=dir_name,
+                    date_key=None,
+                    item=None,
+                    state={
+                        "status": "failed",
+                        "hash": fp_now,
+                        "source_mtime": mtime_now,
+                        "source_size": size_now,
+                        "last_processed_at": pd.Timestamp.utcnow(),
+                    },
+                )
+                _save_job_state(job_state)
+                logger.error(f"處理發生錯誤：{e}")
+                raise
+
+            job_state = _upsert_job_state_row(
+                job_state,
+                file=file_name,
+                path=file_path,
+                dir_name=dir_name,
+                date_key=date_key,
+                item=item,
+                state={
+                    "status": "success",
                     "hash": fp_now,
                     "source_mtime": mtime_now,
                     "source_size": size_now,
@@ -1227,67 +1264,42 @@ def _process_twse_data_impl(
                 },
             )
             _save_job_state(job_state)
-            logger.error(f"處理發生錯誤：{e}")
-            # 按你的策略：直接整體中止
-            raise
 
-        # 3-6) 清理成功 → 更新 job_state
-        job_state = _upsert_job_state_row(
-            job_state,
-            file=file_name,
-            path=file_path,
-            dir_name=dir_name,
-            date_key=date_key,
-            item=item,
-            state={
-                "status": "success",
-                "hash": fp_now,
-                "source_mtime": mtime_now,
-                "source_size": size_now,
-                "last_processed_at": pd.Timestamp.utcnow(),
-            },
-        )
-        _save_job_state(job_state)
+            processed += 1
+            elapsed = (datetime.now() - start_time).total_seconds()
+            avg_sec = elapsed / processed if processed else 0.0
+            rem = max(remaining_est - processed, 0)
 
-        processed += 1
-        elapsed = (datetime.now() - start_time).total_seconds()
-        avg_sec = elapsed / processed if processed else 0.0
+            logger.info(
+                "完成：%s（date=%s, item=%s）｜本輪已處理 %d 檔 / remaining_est %d｜掃描 %d/%d｜skip %d｜平均 %.1f 秒/檔。",
+                cleaned_file_name,
+                date_key,
+                item,
+                processed,
+                rem,
+                scanned_idx,
+                total_files,
+                skipped_unchanged,
+                avg_sec,
+            )
 
-        logger.info(
-            "完成：%s（date=%s, item=%s）｜本輪已處理 %d 檔 / 總檔數 %d（掃描到第 %d 檔），平均耗時 %.1f 秒/檔。",
-            cleaned_file_name,
-            date_key,
-            item,
-            processed,
-            total_files,
-            scanned_idx,
-            avg_sec,
-        )
+    finally:
+        # 不論有沒有錯，都把本輪累積的 df 一次寫回 DB
+        _overwrite_line_end()
+        _flush_db_write_buffer()
 
     return processed
+
 
 def process_twse_data(
     cols: Optional[List[str]] = None,
     *,
-    storage_mode: str = "cloud",     # "cloud" / "cloud_staging" / "local"
+    storage_mode: str = "cloud",
     batch_size: Optional[int] = None,
     bucket_mode: str = "all",
 ) -> None:
     """
     TWSE 清理主入口。
-
-    cols:
-        要清哪幾個 item（如 ["三大法人買賣超日報"]），None 則清全部。
-
-    storage_mode:
-        - "cloud"         : 直接用雲端 db_root（config.paths 的 db_root）
-        - "cloud_staging" : 雲端 + 本機暫存（先把 cleaned 整包拉到本機處理，再同步回雲端）
-        - "local"         : 完全只用本機 root（config.paths 的 db_local_root），不碰雲端
-
-    batch_size:
-        - 僅在 "cloud_staging" 模式有效，每一輪最多處理幾個檔案。
-          例如 500 表示每次 staging 只處理 500 個 source 檔，處理完同步回雲端，再下載下一批。
-          None 則視為「一次清到底」。
     """
     global dbpath_source, dbpath_cleaned, dbpath_cleaned_log
 
@@ -1303,17 +1315,15 @@ def process_twse_data(
         dbpath_cleaned,
     )
 
-    # 先備份「目前」的 active 路徑（通常是雲端）
     orig_source = dbpath_source
     orig_cleaned = dbpath_cleaned
     orig_cleaned_log = dbpath_cleaned_log
 
     # ---------- 情境 A：完全本機模式 ----------
     if storage_mode == "local":
-        # ★ 先把本機 local_path 清乾淨，避免殘留舊測試資料
         logger.info("LOCAL 模式啟動，先清空本機 db_local_root：%s", LOCAL_DB_ROOT)
         _clear_local_paths()
-        # 切換成「本機」路徑
+
         dbpath_source = LOCAL_DBPATH_SOURCE
         dbpath_cleaned = LOCAL_DBPATH_CLEANED
         dbpath_cleaned_log = LOCAL_DBPATH_CLEANED_LOG
@@ -1321,11 +1331,7 @@ def process_twse_data(
         _ensure_dir(str(dbpath_source))
         _ensure_dir(str(dbpath_cleaned))
 
-        logger.info(
-            "進入 LOCAL 模式：source=%s, cleaned=%s",
-            dbpath_source,
-            dbpath_cleaned,
-        )
+        logger.info("進入 LOCAL 模式：source=%s, cleaned=%s", dbpath_source, dbpath_cleaned)
 
         try:
             _process_twse_data_impl(
@@ -1334,7 +1340,6 @@ def process_twse_data(
                 max_files_per_run=batch_size,
             )
         finally:
-            # 不管有沒有出錯，都把路徑還原
             dbpath_source = orig_source
             dbpath_cleaned = orig_cleaned
             dbpath_cleaned_log = orig_cleaned_log
@@ -1342,18 +1347,13 @@ def process_twse_data(
         return
 
     # ---------- 情境 B / C：以雲端為主 ----------
-    # 先把 active 路徑切回「雲端版本」
     dbpath_source = CLOUD_DBPATH_SOURCE
     dbpath_cleaned = CLOUD_DBPATH_CLEANED
     dbpath_cleaned_log = CLOUD_DBPATH_CLEANED_LOG
 
-    # B-1：純雲端（舊的「不用 staging」）
+    # B-1：純雲端
     if storage_mode == "cloud":
-        logger.info(
-            "進入 CLOUD (no staging) 模式：source=%s, cleaned=%s",
-            dbpath_source,
-            dbpath_cleaned,
-        )
+        logger.info("進入 CLOUD (no staging) 模式：source=%s, cleaned=%s", dbpath_source, dbpath_cleaned)
         try:
             _process_twse_data_impl(
                 cols,
@@ -1366,35 +1366,62 @@ def process_twse_data(
             dbpath_cleaned_log = orig_cleaned_log
         return
 
-    # B-2：雲端 + 本機 staging（你原本的 use_local_db_staging=True 模式）
+    # B-2：雲端 + 本機 staging
     if batch_size is None:
         batch_size = 10_000_000  # 一次清到底
 
     target_cleaned: Path = CLOUD_DBPATH_CLEANED
     staging_root: Path = LOCAL_DB_ROOT
 
-    # ★ 每次 cloud_staging 啟動前，先把舊的 staging_* 目錄清掉
     logger.info("cloud_staging 啟動前，先清理本機 staging 目錄（root=%s）", staging_root)
     _clear_staging_dirs(staging_root)
 
     batch_no = 0
+    synced_batches = 0
+
     while True:
         batch_no += 1
-        logger.info("===== 開始 staging batch %d，batch_size=%d =====", batch_no, batch_size)
 
-        # staging_path：
-        # 1) 把「雲端 cleaned」整個複製到 staging_root 下某個 staging_xxx/cleaned 資料夾
-        # 2) yield 本機 cleaned 的路徑
-        # 3) 離開 with 時把本機結果同步回雲端，並把 staging_xxx 刪掉
+        # === 進 staging 前先檢查 remaining；remaining=0 就不進 with（避免空 batch 同步） ===
+        try:
+            tmp_job_state = _load_job_state()  # 使用雲端 dbpath_cleaned_log
+            tmp_files_df = _list_source_pickles(dbpath_source)
+            if cols:
+                tmp_files_df = tmp_files_df[tmp_files_df["dir"].isin(cols)].copy()
+            remaining_est = _estimate_remaining_by_job_state(tmp_files_df, tmp_job_state)
+        except Exception as e:
+            logger.warning("預檢 remaining_est 失敗（保守起見照常進 staging）：err=%s", e)
+            remaining_est = 1
+            tmp_files_df = pd.DataFrame()
+            tmp_job_state = pd.DataFrame(columns=JOB_STATE_COLUMNS)
+
+        if remaining_est == 0:
+            logger.info("staging batch %d 預檢 remaining_est=0，進行一次精準確認...", batch_no)
+            if not _has_any_pending_exact(tmp_files_df, tmp_job_state):
+                logger.info(
+                    "確認無待處理檔案 → 不進 staging，結束迴圈。已同步批次=%d",
+                    synced_batches
+                )
+                break
+            logger.info("精準確認：仍有待處理檔案（可能是 source 變更）→ 繼續進 staging。")
+
+        remaining_batches_est = math.ceil(remaining_est / batch_size) if remaining_est > 0 else 0
+
+        logger.info(
+            "===== 開始 staging batch %d | batch_size=%d | remaining_est=%d | remaining_batches_est=%d | synced_batches=%d =====",
+            batch_no,
+            batch_size,
+            remaining_est,
+            remaining_batches_est,
+            synced_batches,
+        )
+
         with staging_path(target_cleaned, enable=True, staging_root=staging_root) as local_cleaned:
             try:
                 dbpath_cleaned = local_cleaned
                 dbpath_cleaned_log = local_cleaned / "log.pkl"
 
-                logger.info(
-                    "cloud_staging 模式：本輪在本機 cleaned=%s 上處理",
-                    dbpath_cleaned,
-                )
+                logger.info("cloud_staging 模式：本輪在本機 cleaned=%s 上處理", dbpath_cleaned)
 
                 processed = _process_twse_data_impl(
                     cols,
@@ -1402,17 +1429,18 @@ def process_twse_data(
                     max_files_per_run=batch_size,
                 )
             finally:
-                # 恢復成雲端 cleaned
                 dbpath_cleaned = CLOUD_DBPATH_CLEANED
                 dbpath_cleaned_log = CLOUD_DBPATH_CLEANED_LOG
 
+        # 只要進過 staging with，就代表「同步行為發生」一次（即使 processed=0 也算）
+        synced_batches += 1
+
         if processed == 0:
-            logger.info("沒有待處理檔案，staging 迴圈結束。")
+            logger.info("本輪 processed=0（理論上不應發生，因為前面已擋掉 remaining_est=0），staging 迴圈結束。")
             break
 
-        logger.info("===== staging batch %d 完成，本輪處理 %d 個檔案 =====", batch_no, processed)
+        logger.info("===== staging batch %d 完成，本輪處理 %d 個檔案 | synced_batches=%d =====", batch_no, processed, synced_batches)
 
-    # 最後保險再把 active 路徑恢復到原本狀態
     dbpath_source = orig_source
     dbpath_cleaned = orig_cleaned
     dbpath_cleaned_log = orig_cleaned_log
@@ -1462,14 +1490,11 @@ def main(argv: Optional[List[str]] = None) -> None:
 
 
 if __name__ == "__main__":
-    # 給 CLI 用的入口：如果你是用 `python -m data_cleaning.twse ...`，
-    # 就讓 argparse 去解析參數
     # main()
 
-    # 給你平常「直接執行這個檔案」用的預設參數版本：
     process_twse_data(
-        cols=None,                 # None = 所有 item 都清
+        cols=None,
         storage_mode="cloud_staging",
-        batch_size=500,            # 每輪最多處理 500 個檔
-        bucket_mode="all",         # 要分年就改 "year"
+        batch_size=500,
+        bucket_mode="year",
     )
