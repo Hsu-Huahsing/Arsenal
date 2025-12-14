@@ -10,59 +10,54 @@ TWSE 清理器：合併自 data_cleaning/cleaner_main.py + cleaning_utils.py
 - 每個函式可單獨測試
 - 重複/冗餘邏輯已精簡（欄名歸一處理等）
 """
-
 import argparse
 import logging
-import math
-import re
-import shutil
-import sys
-import time
-import unicodedata
-from dataclasses import dataclass, field
-from datetime import datetime
 from os import makedirs
-from os.path import basename, exists
+from os.path import exists, join, basename
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
-
+from typing import Any, Dict, Optional, Tuple, List, Union
+from datetime import datetime
+from dataclasses import dataclass, field
+import time
+import math
+import sys
 import pandas as pd
+import shutil
+import re
+import unicodedata
 
 # ---- StevenTricks 與 config ----
-from config.conf import fields_span, dropcol, key_set, collection
+from config.conf import fields_span, dropcol, key_set
 from config.col_rename import colname_dic, transtonew_col
 from config.col_format import numericol, datecol
+from StevenTricks.io.file_utils import pickleio, PathWalk_df
+from StevenTricks.core.convert_utils import safe_replace, safe_numeric_convert, stringtodate
+from StevenTricks.db.internal_db import DBPkl
 from config.paths import (
     dbpath_source as CLOUD_DBPATH_SOURCE,
     dbpath_cleaned as CLOUD_DBPATH_CLEANED,
     dbpath_cleaned_log as CLOUD_DBPATH_CLEANED_LOG,
     db_local_root,
 )
-from StevenTricks.core.convert_utils import safe_replace, safe_numeric_convert, stringtodate
-from StevenTricks.db.internal_db import DBPkl
-from StevenTricks.io.file_utils import pickleio, PathWalk_df
+from config.conf import collection
 from StevenTricks.io.staging import staging_path
 
-# active 變數：一開始指向「雲端」，之後會依 storage_mode 被切到 local / staging
+
 dbpath_source = CLOUD_DBPATH_SOURCE
 dbpath_cleaned = CLOUD_DBPATH_CLEANED
 dbpath_cleaned_log = CLOUD_DBPATH_CLEANED_LOG
 
-# 本機根目錄（config.paths.db_local_root）
 LOCAL_DB_ROOT = db_local_root
 LOCAL_DBPATH_SOURCE = LOCAL_DB_ROOT / "source"
 LOCAL_DBPATH_CLEANED = LOCAL_DB_ROOT / "cleaned"
 LOCAL_DBPATH_CLEANED_LOG = LOCAL_DBPATH_CLEANED / "log.pkl"
 
+
 DEBUG_LAST_DF: Optional[pd.DataFrame] = None
 DEBUG_LAST_CONTEXT: Dict[str, Any] = {}
 
-# ---- 非日頻（freq != D）是否允許回補/覆寫舊資料 ----
-# False：只取最新 date，且不覆寫既有 PK（預設）
-# True ：保留所有 date，對 DB 做 upsert（新資料覆寫舊資料）
 UPDATE_OLD_NON_DAILY: bool = False
 
-# ---- Logging：預設 DEBUG ----
 _root = logging.getLogger()
 if not _root.handlers:
     logging.basicConfig(
@@ -73,7 +68,6 @@ if not _root.handlers:
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-# ---- job_state 設計 ----
 JOB_STATE_COLUMNS = [
     "file",
     "path",
@@ -88,22 +82,15 @@ JOB_STATE_COLUMNS = [
 ]
 
 
-# =========================
-# 覆蓋式進度列（避免 log 爆量）
-# =========================
 def _overwrite_line(msg: str) -> None:
     sys.stdout.write("\r" + msg[:240])
     sys.stdout.flush()
-
 
 def _overwrite_line_end() -> None:
     sys.stdout.write("\n")
     sys.stdout.flush()
 
 
-# =========================
-# remaining 估算 / 精準判斷
-# =========================
 def _estimate_remaining_by_job_state(files_df: pd.DataFrame, job_state: pd.DataFrame) -> int:
     if files_df is None or files_df.empty:
         return 0
@@ -218,25 +205,37 @@ def _clear_staging_dirs(staging_root: Path) -> None:
                 logger.warning("清除 staging 目錄失敗：%s (%s)", sub, e)
 
 
-def _extract_legacy_subtables(raw: dict) -> List[dict]:
-    subtables: List[dict] = []
+def _extract_legacy_subtables(raw: dict) -> list[dict]:
+    subtables: list[dict] = []
+
     for key in raw.keys():
         m = re.match(r"^fields(\d+)$", key)
         if not m:
             continue
         idx = int(m.group(1))
+
         fields = raw.get(f"fields{idx}")
         data = raw.get(f"data{idx}")
         title = raw.get(f"subtitle{idx}")
+
         if not fields or not data:
             continue
-        subtables.append({"idx": idx, "title": title, "fields": fields, "data": data})
+
+        subtables.append(
+            {
+                "idx": idx,
+                "title": title,
+                "fields": fields,
+                "data": data,
+            }
+        )
+
     return subtables
 
 
 def _get_span_cfg(item: str, subitem: str) -> Optional[dict]:
     by_item = (fields_span.get(item, {}) or {}).get(subitem)
-    direct = fields_span.get(subitem)
+    direct  = fields_span.get(subitem)
     return by_item or direct
 
 
@@ -245,8 +244,13 @@ def _is_partition_by_date_item(item: str) -> bool:
     freq = cfg.get("freq")
     if freq is None:
         return False
+
     s = str(freq).strip().upper()
-    return s in {"D", "1D", "DAY", "DAILY"}
+    if s == "D":
+        return True
+    if s in {"1D", "DAY", "DAILY"}:
+        return True
+    return False
 
 
 def _is_me_freq_item(item: str) -> bool:
@@ -254,7 +258,8 @@ def _is_me_freq_item(item: str) -> bool:
     freq = cfg.get("freq")
     if freq is None:
         return False
-    return str(freq).strip().upper() == "ME"
+    s = str(freq).strip().upper()
+    return s == "ME"
 
 
 def _is_non_daily_freq_item(item: str) -> bool:
@@ -315,7 +320,6 @@ def _make_bucket_key(date_series: pd.Series, mode: str) -> pd.Series:
     return pd.Series(["ALL"] * len(date_series), index=date_series.index)
 
 
-# ---- 自訂錯誤類 ----
 class DataCleanError(RuntimeError):
     def __init__(
         self,
@@ -376,7 +380,10 @@ def _match_subtitle_from_conf_by_contains(
             "config.collection[item]['subtitle'] 未設定或為空，無法判定子表",
             file=file_name,
             item=item,
-            value={"raw_title": raw_title, "title_norm": title_norm},
+            value={
+                "raw_title": raw_title,
+                "title_norm": title_norm,
+            },
         )
 
     if isinstance(subtitles_conf, str):
@@ -398,14 +405,22 @@ def _match_subtitle_from_conf_by_contains(
             "子表標題在 collection[item]['subtitle'] 中完全配對不到",
             file=file_name,
             item=item,
-            value={"raw_title": raw_title, "title_norm": title_norm, "subtitle_list": list(subtitles_conf)},
+            value={
+                "raw_title": raw_title,
+                "title_norm": title_norm,
+                "subtitle_list": list(subtitles_conf),
+            },
         )
 
     raise DataCleanError(
         "子表標題在 collection[item]['subtitle'] 中配對到多個候選，無法唯一判定",
         file=file_name,
         item=item,
-        value={"raw_title": raw_title, "title_norm": title_norm, "candidates": hits},
+        value={
+            "raw_title": raw_title,
+            "title_norm": title_norm,
+            "candidates": hits,
+        },
     )
 
 
@@ -431,7 +446,7 @@ def _load_job_state() -> pd.DataFrame:
     if not exists(dbpath_cleaned_log):
         return pd.DataFrame(columns=JOB_STATE_COLUMNS)
 
-    obj = pickleio(path=str(dbpath_cleaned_log), mode="load")
+    obj = pickleio(path=dbpath_cleaned_log, mode="load")
 
     if isinstance(obj, pd.DataFrame):
         js = obj.copy()
@@ -441,7 +456,10 @@ def _load_job_state() -> pd.DataFrame:
         return js[JOB_STATE_COLUMNS]
 
     if isinstance(obj, (set, list, tuple)):
-        return pd.DataFrame({"file": list(map(str, obj))}, columns=JOB_STATE_COLUMNS)
+        return pd.DataFrame(
+            {"file": list(map(str, obj))},
+            columns=JOB_STATE_COLUMNS,
+        )
 
     return pd.DataFrame(columns=JOB_STATE_COLUMNS)
 
@@ -451,7 +469,7 @@ def _save_job_state(job_state: pd.DataFrame) -> None:
         if col not in job_state.columns:
             job_state[col] = pd.NA
     job_state = job_state[JOB_STATE_COLUMNS]
-    pickleio(path=str(dbpath_cleaned_log), data=job_state, mode="save")
+    pickleio(path=dbpath_cleaned_log, data=job_state, mode="save")
 
 
 def _upsert_job_state_row(
@@ -471,17 +489,29 @@ def _upsert_job_state_row(
 
     if not idx.any():
         row = {col: pd.NA for col in JOB_STATE_COLUMNS}
-        row.update({"file": file, "path": path, "dir": dir_name, "date": date_key, "item": item})
+        row.update(
+            {
+                "file": file,
+                "path": path,
+                "dir": dir_name,
+                "date": date_key,
+                "item": item,
+            }
+        )
         row.update(state)
+
         row_df = pd.DataFrame([row], columns=JOB_STATE_COLUMNS)
+
         if job_state.empty:
             job_state = row_df
         else:
             job_state = pd.concat([job_state, row_df], ignore_index=True)
+
     else:
         for k, v in state.items():
             if k in job_state.columns:
                 job_state.loc[idx, k] = v
+
         job_state.loc[idx, "file"] = file
         job_state.loc[idx, "path"] = path
         job_state.loc[idx, "dir"] = dir_name
@@ -493,24 +523,23 @@ def _upsert_job_state_row(
     return job_state
 
 
-# ---- 解析 TWSE API 結構 → 子表 dict list ----
-def key_extract(dic: dict) -> List[dict]:
+def key_extract(dic: dict) -> list[dict]:
     if not isinstance(dic, dict):
         raise TypeError(f"key_extract() expects dict, got {type(dic).__name__}")
 
-    out: List[dict] = []
+    out: list[dict] = []
 
     def _listify(x):
         return x if isinstance(x, (list, tuple)) else [x]
 
-    def _find_first_key(container: dict, aliases: List[str]) -> Tuple[str, bool]:
+    def _find_first_key(container: dict, aliases: list[str]) -> tuple[str, bool]:
         for k in aliases:
             if k in container:
                 return k, True
         return "", False
 
-    def _extract_from_container(container: dict) -> List[dict]:
-        dicts: List[dict] = []
+    def _extract_from_container(container: dict) -> list[dict]:
+        dicts: list[dict] = []
         for step, set_i in key_set.items():
             if not isinstance(set_i, dict):
                 continue
@@ -518,7 +547,7 @@ def key_extract(dic: dict) -> List[dict]:
             if step == "main1":
                 cnt = 0
                 while True:
-                    curr: Dict[str, Any] = {}
+                    curr: dict = {}
                     for key_name, alias_list in set_i.items():
                         aliases = _listify(alias_list)
                         candidates = [a if cnt == 0 else f"{a}{cnt}" for a in aliases]
@@ -532,6 +561,7 @@ def key_extract(dic: dict) -> List[dict]:
                         break
 
                     cnt += 1
+
             else:
                 curr = {}
                 for key_name, alias_list in set_i.items():
@@ -555,7 +585,6 @@ def key_extract(dic: dict) -> List[dict]:
     return out
 
 
-# ---- 兩種 DataFrame 組裝 ----
 def frameup_safe(d: Dict[str, Any]) -> pd.DataFrame:
     fields = list(d.get("fields", []))
     rows = list(d.get("data", []))
@@ -618,7 +647,7 @@ def finalize_dataframe(
         bad = df
         raise DataCleanError(
             "日期欄位轉換失敗",
-            item=item, subitem=subitem, column=str(date_cfg),
+            item=item, subitem=subitem, column=date_cfg,
             value=bad, value_type=type(bad).__name__,
             hint="請補充 changetype_stringtodate 規則或前置清理邏輯",
         ) from e
@@ -630,12 +659,10 @@ def finalize_dataframe(
 
 
 def _db_path_for_item(item: str) -> str:
-    # dbpath_cleaned 可能是 Path；用 Path 拼接最保險
-    _ensure_dir(str(dbpath_cleaned))
-    return str(Path(dbpath_cleaned) / f"{item}")
+    _ensure_dir(dbpath_cleaned)
+    return join(dbpath_cleaned, f"{item}")
 
 
-# ---- DB 寫入 Buffer ----
 @dataclass
 class _PendingWrite:
     db_path: Path
@@ -680,11 +707,12 @@ def _enqueue_db_write(
             partition_cols=list(partition_cols) if partition_cols else None,
             convert_mode=convert_mode,
             is_me_freq=is_me_freq,
-            partition_by_date=partition_by_date,
+            partition_by_date=True if partition_by_date else False,
             bucket_mode=bucket_mode,
         )
 
-    _DB_WRITE_BUFFER[key].dfs.append(df.copy())
+    pending = _DB_WRITE_BUFFER[key]
+    pending.dfs.append(df.copy())
 
 
 def _drop_dup_with_report(
@@ -712,6 +740,48 @@ def _drop_dup_with_report(
     return out
 
 
+def _upsert_merge_existing(
+    dbi: DBPkl,
+    df_new: pd.DataFrame,
+    pk: List[str],
+    *,
+    item: str,
+    subitem: str,
+) -> pd.DataFrame:
+    if df_new is None or df_new.empty:
+        return df_new
+    if not pk or not all(c in df_new.columns for c in pk):
+        return df_new
+
+    try:
+        existing = dbi.load_db()
+    except FileNotFoundError:
+        existing = None
+    except Exception as e:
+        logger.warning(
+            "讀取既有資料失敗（將退化為直接寫入本批）：item=%s subitem=%s err=%s",
+            item, subitem, e
+        )
+        existing = None
+
+    if existing is None or existing.empty:
+        return df_new
+
+    merged = pd.concat([existing, df_new], ignore_index=True)
+
+    before = len(merged)
+    merged = merged.drop_duplicates(subset=pk, keep="last").copy()
+    removed = before - len(merged)
+
+    if removed > 0:
+        logger.info(
+            "UPSERT 去重（existing + new）：item=%s subitem=%s pk=%s removed=%d (rows %d -> %d) | exist=%d new=%d",
+            item, subitem, pk, removed, before, len(merged), len(existing), len(df_new)
+        )
+
+    return merged
+
+
 def _flush_db_write_buffer() -> None:
     global DEBUG_LAST_DF, DEBUG_LAST_CONTEXT
     global UPDATE_OLD_NON_DAILY
@@ -731,9 +801,9 @@ def _flush_db_write_buffer() -> None:
             logical_table_name=pending.subitem,
         )
 
-        pk_list: List[str] = list(pending.pk) if pending.pk else []
+        pk = pending.pk if pending.pk else None
+        pk_list: List[str] = list(pk) if pk else []
 
-        # ① 同批去重（必要且便宜）
         if pk_list:
             df_new = _drop_dup_with_report(
                 df_new, pk_list,
@@ -742,23 +812,36 @@ def _flush_db_write_buffer() -> None:
                 stage="flush 前（同批）"
             )
 
-        # ② 非日頻「不回補」：剔除已存在 PK（避免覆寫舊資料）
         non_daily = _is_non_daily_freq_item(pending.item)
 
-        if non_daily and (not UPDATE_OLD_NON_DAILY) and pk_list and all(c in df_new.columns for c in pk_list):
+        existing = None
+        if non_daily and pk_list and all(c in df_new.columns for c in pk_list):
             try:
-                existing_raw = dbi.load_raw()  # 只拿 key 用，避免 decode_links/validate 的成本
+                existing = dbi.load_db()
             except FileNotFoundError:
-                existing_raw = None
+                existing = None
             except Exception as e:
                 logger.warning(
                     "讀取既有資料失敗（非日頻策略將退化為直接寫入）：item=%s subitem=%s err=%s",
                     pending.item, pending.subitem, e
                 )
-                existing_raw = None
+                existing = None
 
-            if existing_raw is not None and (not existing_raw.empty) and all(c in existing_raw.columns for c in pk_list):
-                exist_keys = existing_raw[pk_list].drop_duplicates()
+        if non_daily and existing is not None and not existing.empty and pk_list and all(c in existing.columns for c in pk_list):
+            if UPDATE_OLD_NON_DAILY:
+                before_exist = len(existing)
+                before_new = len(df_new)
+
+                merged = pd.concat([existing, df_new], ignore_index=True)
+                merged = merged.drop_duplicates(subset=pk_list, keep="last").copy()
+
+                logger.info(
+                    "非日頻回補/覆寫舊資料（UPSERT）：item=%s subitem=%s exist=%d new=%d merged=%d pk=%s",
+                    pending.item, pending.subitem, before_exist, before_new, len(merged), pk_list
+                )
+                df_new = merged
+            else:
+                exist_keys = existing[pk_list].drop_duplicates()
                 before_new = len(df_new)
 
                 tmp = df_new.merge(exist_keys, on=pk_list, how="left", indicator=True)
@@ -777,7 +860,17 @@ def _flush_db_write_buffer() -> None:
                     )
                     continue
 
-        # ③ 寫入：交給 DBPkl 內部 old/new/final 去重與合併
+        need_upsert = True
+        if non_daily and (not UPDATE_OLD_NON_DAILY):
+            need_upsert = False
+
+        if need_upsert and pk_list:
+            df_new = _upsert_merge_existing(
+                dbi, df_new, pk_list,
+                item=pending.item,
+                subitem=pending.subitem
+            )
+
         try:
             if pending.partition_cols:
                 dbi.write_partition(
@@ -785,14 +878,12 @@ def _flush_db_write_buffer() -> None:
                     convert_mode=pending.convert_mode,
                     partition_cols=pending.partition_cols,
                     primary_key=pk_list if pk_list else None,
-                    pk_policy="override",  # ✅ 讓舊 schema PK 可被矯正
                 )
             else:
                 dbi.write_db(
                     df_new,
                     convert_mode=pending.convert_mode,
                     primary_key=pk_list if pk_list else None,
-                    pk_policy="override",  # ✅ 同上
                 )
 
         except Exception as e:
@@ -826,7 +917,7 @@ def _flush_db_write_buffer() -> None:
 
 def _write_to_db(
     df: pd.DataFrame,
-    convert_mode: str = "upcast",
+    convert_mode: str = "coerce",  # ★ changed: 原本 upcast，對「字串像數字」沒幫助
     *,
     item: str,
     subitem: str,
@@ -910,6 +1001,9 @@ def _write_to_db(
         bucket_mode=bucket_mode,
     )
 
+# ====== 下面你的主流程（_process_one_file / _process_twse_data_impl / process_twse_data / CLI） ======
+# （其餘內容保持你貼的版本不變）
+# 你貼的檔案後半段我不再重複註解，直接原樣保留。
 
 # ---- 清洗一個檔案（主流程子步驟） ----
 def _process_one_file(
@@ -918,9 +1012,10 @@ def _process_one_file(
     bucket_mode: str = "all",
     update_old_non_daily: bool = False,
 ) -> Tuple[str, str, str]:
+
     file_name = basename(file_path)
     parentdir = Path(file_path).parent.name
-    logger.info("處理檔案：%s（類別=%s）", file_name, parentdir)
+    logger.info(f"處理檔案：{file_name}（類別={parentdir}）")
 
     t0 = time.perf_counter()
 
@@ -931,9 +1026,22 @@ def _process_one_file(
     t1 = time.perf_counter()
 
     try:
-        date_key = raw.get("crawlerdic", {}).get("payload", {}).get("date")
+        date_key = raw.get("crawlerdic",{}).get("payload",{}).get("date")
     except Exception as e:
         raise DataCleanError("無法取得 crawler 日期", file=file_name, item=parentdir, value=raw.get("crawlerdic")) from e
+
+    subtitle_from_crawler = raw.get("crawlerdic",{}).get("subtitle")
+    if isinstance(subtitle_from_crawler, list) and subtitle_from_crawler:
+        subtitle_allowed = [colname_dic.get(x, x) for x in subtitle_from_crawler]
+    else:
+        subtitle_allowed = [colname_dic.get(x, x) for x in (collection.get(parentdir, {}).get("subtitle") or [parentdir])]
+
+    if not subtitle_allowed:
+        raise RuntimeError(
+            f"subtitle_allowed 為空，無法判定清理目標；"
+            f"file={file_name}, item={parentdir}. "
+            f"請檢查 crawlerdic.subtitle 或 config.collection['{parentdir}']['subtitle']"
+        )
 
     sub_tables = key_extract(raw)
 
@@ -963,7 +1071,7 @@ def _process_one_file(
         fields = d.get("fields")
         data = d.get("data")
         if not fields or not data:
-            logger.debug("略過子表（無資料）：title=%r", title)
+            logger.debug(f"略過子表（無資料）：title={title!r}")
             continue
 
         subitem_raw = _match_subtitle_from_conf_by_contains(
@@ -971,13 +1079,20 @@ def _process_one_file(
             raw_title=title,
             file_name=file_name,
         )
+
         subitem = colname_dic.get(subitem_raw, subitem_raw)
 
-        logger.debug("清理子表：%s（原 title=%r, matched subtitle=%r）", subitem, title, subitem_raw)
+        logger.debug(
+            "清理子表：%s（原 title=%r, matched subtitle=%r）",
+            subitem,
+            title,
+            subitem_raw,
+        )
 
         t_clean_start = time.perf_counter()
         try:
             span_cfg = _get_span_cfg(parentdir, subitem)
+
             if span_cfg:
                 df0 = data_cleaned_groups({"fields": fields, "data": data}, span_cfg)
             else:
@@ -999,7 +1114,6 @@ def _process_one_file(
 
         t_write_start = time.perf_counter()
 
-        # 非日頻策略
         df1 = _apply_non_daily_policy(
             df1,
             item=parentdir,
@@ -1032,6 +1146,10 @@ def _process_one_file(
     )
 
     return date_key, parentdir, file_name
+
+# （後續 _process_twse_data_impl / process_twse_data / CLI 與你貼的一致，略）
+# 你可以直接把你原檔後半段黏回去；上面變動點只在 _write_to_db 的預設 convert_mode。
+
 
 
 # ---- 清洗流程（可被 import 呼叫） ----
