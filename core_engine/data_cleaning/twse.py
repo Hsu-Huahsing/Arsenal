@@ -234,9 +234,45 @@ def _extract_legacy_subtables(raw: dict) -> list[dict]:
 
 
 def _get_span_cfg(item: str, subitem: str) -> Optional[dict]:
+    """
+    取得 span 設定（fields_span）：
+    - 允許兩種寫法：
+        1) fields_span[item][subitem]
+        2) fields_span[subitem]
+    - 但只有在 cfg 具備有效的 groups 時才會回傳，否則回 None（退回 frameup_safe）
+    """
     by_item = (fields_span.get(item, {}) or {}).get(subitem)
-    direct  = fields_span.get(subitem)
-    return by_item or direct
+    direct = fields_span.get(subitem)
+    cfg = by_item or direct
+
+    if not cfg:
+        return None
+
+    if not isinstance(cfg, dict):
+        logger.warning(
+            "[fields_span ignored] cfg not dict -> fallback frameup_safe | item=%s subitem=%s cfg_type=%s",
+            item, subitem, type(cfg).__name__
+        )
+        return None
+
+    groups = cfg.get("groups")
+    if not groups or not isinstance(groups, list):
+        logger.warning(
+            "[fields_span ignored] missing/invalid groups -> fallback frameup_safe | item=%s subitem=%s cfg_keys=%s",
+            item, subitem, list(cfg.keys())
+        )
+        return None
+
+    # 基本健檢：每個 group 至少要有 size
+    for i, g in enumerate(groups):
+        if not isinstance(g, dict) or int(g.get("size", 0) or 0) <= 0:
+            logger.warning(
+                "[fields_span ignored] invalid group(size) -> fallback frameup_safe | item=%s subitem=%s group_idx=%d group=%r",
+                item, subitem, i, g
+            )
+            return None
+
+    return cfg
 
 
 def _is_partition_by_date_item(item: str) -> bool:
@@ -1093,7 +1129,7 @@ def _process_one_file(
         try:
             span_cfg = _get_span_cfg(parentdir, subitem)
 
-            if span_cfg:
+            if span_cfg is not None:
                 df0 = data_cleaned_groups({"fields": fields, "data": data}, span_cfg)
             else:
                 df0 = frameup_safe({"fields": fields, "data": data})
