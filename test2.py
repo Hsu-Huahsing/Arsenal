@@ -32,92 +32,60 @@ print("原始資料筆數與欄位：")
 print(df.shape)
 print(df.columns.tolist())
 
-# 看一下有哪些月份，確認 base / comp 可以選什麼
-print("\nFunding_Date_yymm 的唯一值：")
-print(df["Funding_Date_yymm"].value_counts())
-
-# ---------------------------------------------------------
-# 3. 設定 base_period / comp_period
-#    假設你要比較 202510 → 202511（自己確認真的有這兩個值）
-# ---------------------------------------------------------
+# 假設 df 已經準備好，且包含 Funding_Date_yymm, Funding_Amt 等欄位
 BASE_PERIOD = 202510
 COMP_PERIOD = 202511
 
-# ---------------------------------------------------------
-# 4. 要納入 Driver Tree 的維度欄位
-#    -> 若某欄在 df 裡不存在，driver_tree 內部會自動略過
-# ---------------------------------------------------------
-dims = [
-    "Product_Flag_new",
-    "Property_Location_Flag",
-    "Tenor_Flag",
-    "Grace_Length_Flag",
-    "OLTV_Flag",
-    "Cust_Flag",
-    "Investor_Flag",
-    "Acct_Type_Code",
-    "Int_Category_Code",
-    "Batch_Flag",
-    "special_flag",
-    "Public_Flag2024",
-    "cb_Investor_flag",
-]
-
-# ---------------------------------------------------------
-# 5. 跑 Driver Tree
-# ---------------------------------------------------------
-result = run_driver_tree_change(
+result_all = run_driver_tree_change(
     df=df,
     base_period=BASE_PERIOD,
     comp_period=COMP_PERIOD,
-    dims=dims,                     # 若想讓它自動用 DIM_ROLE 裡能找到的欄位，也可以填 None
+    # dims=None 代表用 DIM_ROLE 中所有非 time 欄位
+    dims=None,
     target_col="Funding_Amt",
     time_col="Funding_Date_yymm",
     max_depth=3,
     min_node_share=0.05,
     top_k=5,
+    split_policy="best_overall",
 )
 
-root = result["root"]
-nodes_df = result["nodes_df"]
-pivots = result["pivots"]
+nodes_df = result_all["nodes_df"]
+root = result_all["root"]
 
-print("\n=== 節點摘要（前 20 列） ===")
-print(nodes_df.head(20))
+print("=== 整體變動摘要 ===")
+print(root.summary_zh)
 
-print("\n=== 根節點資訊 ===")
-print("root node_id:", root.node_id)
-print("root path:", root.path)
-print("root amt_base:", root.amt_base)
-print("root amt_comp:", root.amt_comp)
-print("root delta_amt:", root.delta_amt)
-print("root delta_share:", root.delta_share)
-print("root summary_zh:", root.summary_zh)
+print("=== 節點列表（前幾筆） ===")
+print(nodes_df.head())
 
-TARGET_PRODUCT = "02.融資型"
 
-df_loan = df[df["Product_Flag_new"] == TARGET_PRODUCT].copy()
 
-dims_loan = [
-    d for d in dims
-    if d != "Product_Flag_new" and d in df_loan.columns
+focus_dims = [
+    "Property_Location_Flag",
+    "Tenor_Flag",
+    "Grace_Length_Flag",
 ]
 
-result_loan = run_driver_tree_change(
-    df=df_loan,
+result_focus = run_driver_tree_change(
+    df=df,
     base_period=BASE_PERIOD,
     comp_period=COMP_PERIOD,
-    dims=dims_loan,
+    dims=focus_dims,          # ✅ 只用這幾個欄位拆解
     target_col="Funding_Amt",
     time_col="Funding_Date_yymm",
-    max_depth=5,         # ✅ 想更細就拉高
-    min_node_share=0.02, # ✅ 融資型內部：2%門檻通常比較合理
-    top_k=10,            # ✅ 類別多就調大
+    max_depth=3,
+    min_node_share=0.05,
+    top_k=5,
+    split_policy="best_overall",
 )
 
-root_loan = result_loan["root"]
-nodes_loan = result_loan["nodes_df"]
-pivots_loan = result_loan["pivots"]
+print("=== 指定三個欄位拆解的 root 摘要 ===")
+print(result_focus["root"].summary_zh)
 
-print(root_loan.summary_zh)
+print("=== root 節點使用的 split_dim ===")
+print(result_focus["root"].split_dim)
 
+print("=== root 對應的 pivot（看哪個類別影響最大） ===")
+root_pivot = result_focus["pivots"][result_focus["root"].node_id]
+print(root_pivot.sort_values("abs_delta", ascending=False).head(10))

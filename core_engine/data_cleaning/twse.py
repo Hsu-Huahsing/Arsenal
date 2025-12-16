@@ -15,7 +15,7 @@ import logging
 from os import makedirs
 from os.path import exists, join, basename
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple, List, Union
+from typing import Any, Dict, Optional, Tuple, List
 from datetime import datetime
 from dataclasses import dataclass, field
 import time
@@ -187,7 +187,7 @@ def _clear_local_paths() -> None:
             LOCAL_DBPATH_CLEANED_LOG.unlink()
             logger.info("已刪除本機 job_state log：%s", LOCAL_DBPATH_CLEANED_LOG)
     except Exception as e:
-        logger.warning("刪除本機 job_state log 失敗：%s (%s)", LOCAL_DBPATH_CLEANED_LOG, e)
+        logger.warning("刪除本機 job_state log 失敗：%s (%s)", p, e)
 
 
 def _clear_staging_dirs(staging_root: Path) -> None:
@@ -231,23 +231,22 @@ def _extract_legacy_subtables(raw: dict) -> list[dict]:
         )
 
     return subtables
-
-
 def _get_span_cfg(item: str, subitem: str) -> Optional[dict]:
     """
     取得 span 設定（fields_span）：
     - 允許兩種寫法：
         1) fields_span[item][subitem]
         2) fields_span[subitem]
-    - 但只有在 cfg 具備有效的 groups 時才會回傳，否則回 None（退回 frameup_safe）
+    - 支援兩種格式：
+        A) 新版：{"groups": [{"size": 3, "prefix": "股票_"}, ...]}
+        B) 舊版：{"股票": 3, "融資": 5, ...} 或 {"股票":{"size":3}, ...}
+           也支援 size 的別名：n/span/len/count
     """
     by_item = (fields_span.get(item, {}) or {}).get(subitem)
     direct = fields_span.get(subitem)
     cfg = by_item or direct
-
     if not cfg:
         return None
-
     if not isinstance(cfg, dict):
         logger.warning(
             "[fields_span ignored] cfg not dict -> fallback frameup_safe | item=%s subitem=%s cfg_type=%s",
@@ -255,38 +254,91 @@ def _get_span_cfg(item: str, subitem: str) -> Optional[dict]:
         )
         return None
 
+    # --- 新版格式 ---
     groups = cfg.get("groups")
-    if not groups or not isinstance(groups, list):
-        logger.warning(
-            "[fields_span ignored] missing/invalid groups -> fallback frameup_safe | item=%s subitem=%s cfg_keys=%s",
-            item, subitem, list(cfg.keys())
-        )
-        return None
+    if isinstance(groups, list) and groups:
+        for i, g in enumerate(groups):
+            try:
+                size = int(g.get("size", 0) or 0)
+            except Exception:
+                size = 0
+            if not isinstance(g, dict) or size <= 0:
+                logger.warning(
+                    "[fields_span ignored] invalid group(size) -> fallback frameup_safe | item=%s subitem=%s group_idx=%d group=%r",
+                    item, subitem, i, g
+                )
+                return None
+        return cfg
 
-    # 基本健檢：每個 group 至少要有 size
-    for i, g in enumerate(groups):
-        if not isinstance(g, dict) or int(g.get("size", 0) or 0) <= 0:
-            logger.warning(
-                "[fields_span ignored] invalid group(size) -> fallback frameup_safe | item=%s subitem=%s group_idx=%d group=%r",
-                item, subitem, i, g
+    # --- 舊版格式 ---
+    def _pick_size_from_dict(d: dict) -> int:
+        for k in ("size", "n", "span", "len", "count"):
+            if k in d:
+                try:
+                    return int(d.get(k) or 0)
+                except Exception:
+                    return 0
+        # 若 dict 只有一個值且可轉 int，也吃
+        if len(d) == 1:
+            try:
+                return int(list(d.values())[0] or 0)
+            except Exception:
+                return 0
+        return 0
+
+    legacy_keys = [k for k in cfg.keys() if k not in {"groups"}]
+    if legacy_keys:
+        legacy_groups = []
+        ok = True
+        for k in legacy_keys:
+            v = cfg.get(k)
+
+            prefix = f"{k}_"
+            size = 0
+
+            if isinstance(v, dict):
+                size = _pick_size_from_dict(v)
+                if "prefix" in v:
+                    prefix = str(v.get("prefix") or prefix)
+            elif isinstance(v, (list, tuple)) and len(v) == 2:
+                # e.g. ["股票_", 3] or ("股票_", 3)
+                prefix = str(v[0] or prefix)
+                try:
+                    size = int(v[1] or 0)
+                except Exception:
+                    size = 0
+            else:
+                try:
+                    size = int(v)
+                except Exception:
+                    size = 0
+
+            if size <= 0:
+                ok = False
+                break
+
+            legacy_groups.append({"size": size, "prefix": prefix})
+
+        if ok and legacy_groups:
+            logger.info(
+                "[fields_span legacy] auto-convert -> groups | item=%s subitem=%s groups=%s",
+                item, subitem, legacy_groups
             )
-            return None
+            return {"groups": legacy_groups}
 
-    return cfg
-
+    logger.warning(
+        "[fields_span ignored] missing/invalid groups -> fallback frameup_safe | item=%s subitem=%s cfg_keys=%s",
+        item, subitem, list(cfg.keys())
+    )
+    return None
 
 def _is_partition_by_date_item(item: str) -> bool:
     cfg = collection.get(item) or {}
     freq = cfg.get("freq")
     if freq is None:
         return False
-
     s = str(freq).strip().upper()
-    if s == "D":
-        return True
-    if s in {"1D", "DAY", "DAILY"}:
-        return True
-    return False
+    return s in {"D", "1D", "DAY", "DAILY"}
 
 
 def _is_me_freq_item(item: str) -> bool:
@@ -364,7 +416,7 @@ class DataCleanError(RuntimeError):
         file: Optional[str] = None,
         item: Optional[str] = None,
         subitem: Optional[str] = None,
-        column: Optional[str] = None,
+        column: Optional[Any] = None,
         value: Any = None,
         value_type: Optional[str] = None,
         date: Optional[str] = None,
@@ -375,7 +427,7 @@ class DataCleanError(RuntimeError):
         if file: ctx.append(f"file={file}")
         if item: ctx.append(f"item={item}")
         if subitem: ctx.append(f"subitem={subitem}")
-        if column: ctx.append(f"column={column}")
+        if column is not None: ctx.append(f"column={repr(column)}")
         if value is not None: ctx.append(f"value={repr(value)}")
         if value_type: ctx.append(f"value_type={value_type}")
         if date: ctx.append(f"date={date}")
@@ -416,10 +468,7 @@ def _match_subtitle_from_conf_by_contains(
             "config.collection[item]['subtitle'] 未設定或為空，無法判定子表",
             file=file_name,
             item=item,
-            value={
-                "raw_title": raw_title,
-                "title_norm": title_norm,
-            },
+            value={"raw_title": raw_title, "title_norm": title_norm},
         )
 
     if isinstance(subtitles_conf, str):
@@ -441,29 +490,103 @@ def _match_subtitle_from_conf_by_contains(
             "子表標題在 collection[item]['subtitle'] 中完全配對不到",
             file=file_name,
             item=item,
-            value={
-                "raw_title": raw_title,
-                "title_norm": title_norm,
-                "subtitle_list": list(subtitles_conf),
-            },
+            value={"raw_title": raw_title, "title_norm": title_norm, "subtitle_list": list(subtitles_conf)},
         )
 
     raise DataCleanError(
         "子表標題在 collection[item]['subtitle'] 中配對到多個候選，無法唯一判定",
         file=file_name,
         item=item,
-        value={
-            "raw_title": raw_title,
-            "title_norm": title_norm,
-            "candidates": hits,
-        },
+        value={"raw_title": raw_title, "title_norm": title_norm, "candidates": hits},
     )
 
 
 def _normalize_cols(cols: List[str]) -> List[str]:
     mapped = [colname_dic.get(c, c) for c in cols]
-    cleaned = [safe_replace(c, "</br>", "") for c in mapped]
+    cleaned = [safe_replace(str(c), "</br>", "") for c in mapped]
     return cleaned
+def _get_span_prefix_candidates(item: str, subitem: str) -> List[str]:
+    cfg = (fields_span.get(item, {}) or {}).get(subitem) or fields_span.get(subitem) or {}
+    if not isinstance(cfg, dict):
+        return []
+    # legacy keys (股票/融資/融券/其他)
+    keys = [k for k in cfg.keys() if k not in {"groups"}]
+    return [str(k).strip() for k in keys if str(k).strip()]
+
+
+def _make_unique_by_suffix(cols: List[str]) -> List[str]:
+    seen: Dict[str, int] = {}
+    out: List[str] = []
+    for c in cols:
+        n = seen.get(c, 0) + 1
+        seen[c] = n
+        out.append(c if n == 1 else f"{c}__{n}")
+    return out
+
+
+def _repair_duplicate_columns(
+    df: pd.DataFrame,
+    *,
+    file_name: str,
+    item: str,
+    subitem: str,
+    table_name: str,
+) -> pd.DataFrame:
+    cols = list(map(str, df.columns))
+    vc = pd.Series(cols).value_counts()
+    dup = vc[vc > 1]
+    if dup.empty:
+        return df
+
+    prefixes = _get_span_prefix_candidates(item, subitem)
+    # 先試「用 prefixes 分塊加前綴」：最符合你這張表的結構
+    if prefixes:
+        g = len(prefixes)
+
+        # 找第一個重複欄位出現的位置，假設此後是分組區
+        first_dup_col = dup.index[0]
+        try:
+            start = cols.index(first_dup_col)
+        except ValueError:
+            start = 0
+
+        tail = cols[start:]
+        if g >= 2 and len(tail) % g == 0:
+            chunk = len(tail) // g
+            new_tail: List[str] = []
+            for i in range(g):
+                pref = prefixes[i]
+                seg = tail[i * chunk : (i + 1) * chunk]
+                new_tail.extend([f"{pref}_{c}" for c in seg])
+
+            fixed = cols[:start] + new_tail
+            if pd.Index(fixed).is_unique:
+                logger.warning(
+                    "欄名重複：已自動修復（加上分組前綴）| file=%s item=%s subitem=%s table=%s dup_cols=%s prefixes=%s",
+                    file_name, item, subitem, table_name, dup.index.tolist(), prefixes
+                )
+                out = df.copy()
+                out.columns = fixed
+                return out
+
+    # 再退一步：用 __2/__3 suffix 保證唯一（可寫入 DB，但你要接受欄意義較弱）
+    fixed2 = _make_unique_by_suffix(cols)
+    if pd.Index(fixed2).is_unique:
+        logger.warning(
+            "欄名重複：已以序號後綴修復（__2/__3...）| file=%s item=%s subitem=%s table=%s dup_cols=%s",
+            file_name, item, subitem, table_name, dup.index.tolist()
+        )
+        out = df.copy()
+        out.columns = fixed2
+        return out
+
+    # 理論上走不到這
+    raise DataCleanError(
+        "欄名重複且無法自動修復（不允許）",
+        file=file_name, item=item, subitem=subitem,
+        value={"table_name": table_name, "dup_cols": dup.index.tolist(), "dup_counts": dup.to_dict(), "n_cols": len(cols)},
+        hint="請補 fields_span/groups 或調整 subtitle/欄位解析",
+    )
 
 
 def _list_source_pickles(root) -> pd.DataFrame:
@@ -492,10 +615,7 @@ def _load_job_state() -> pd.DataFrame:
         return js[JOB_STATE_COLUMNS]
 
     if isinstance(obj, (set, list, tuple)):
-        return pd.DataFrame(
-            {"file": list(map(str, obj))},
-            columns=JOB_STATE_COLUMNS,
-        )
+        return pd.DataFrame({"file": list(map(str, obj))}, columns=JOB_STATE_COLUMNS)
 
     return pd.DataFrame(columns=JOB_STATE_COLUMNS)
 
@@ -525,22 +645,15 @@ def _upsert_job_state_row(
 
     if not idx.any():
         row = {col: pd.NA for col in JOB_STATE_COLUMNS}
-        row.update(
-            {
-                "file": file,
-                "path": path,
-                "dir": dir_name,
-                "date": date_key,
-                "item": item,
-            }
-        )
+        row.update({"file": file, "path": path, "dir": dir_name, "date": date_key, "item": item})
         row.update(state)
-
         row_df = pd.DataFrame([row], columns=JOB_STATE_COLUMNS)
 
         if job_state.empty:
             job_state = row_df
         else:
+            # 避免 FutureWarning：把全 NA row 過濾掉（雖然這裡通常不會）
+            row_df = row_df.dropna(axis=1, how="all")
             job_state = pd.concat([job_state, row_df], ignore_index=True)
 
     else:
@@ -680,12 +793,11 @@ def finalize_dataframe(
     try:
         df = stringtodate(df, datecol=date_cfg, mode=4)
     except Exception as e:
-        bad = df
         raise DataCleanError(
             "日期欄位轉換失敗",
             item=item, subitem=subitem, column=date_cfg,
-            value=bad, value_type=type(bad).__name__,
-            hint="請補充 changetype_stringtodate 規則或前置清理邏輯",
+            value_type=type(df).__name__,
+            hint="請補充 stringtodate 規則或前置清理邏輯",
         ) from e
 
     front = [c for c in ["date", "代號", "名稱"] if c in df.columns]
@@ -697,6 +809,46 @@ def finalize_dataframe(
 def _db_path_for_item(item: str) -> str:
     _ensure_dir(dbpath_cleaned)
     return join(dbpath_cleaned, f"{item}")
+
+
+# =========================
+# ✅ 一次到位：欄名唯一性檢查（fail-fast）
+# =========================
+def _assert_unique_columns(
+    df: pd.DataFrame,
+    *,
+    file: Optional[str],
+    item: str,
+    subitem: str,
+    table_name: str,
+    stage: str,
+) -> None:
+    if df is None:
+        return
+
+    cols = pd.Index([str(c) for c in df.columns])
+    if cols.is_unique:
+        return
+
+    dup = cols[cols.duplicated()].tolist()
+    # 次數（避免印爆，只列前 60）
+    vc = pd.Series(list(cols)).value_counts()
+    uniq_dup = list(dict.fromkeys(dup))
+    dup_counts = {k: int(vc[k]) for k in uniq_dup[:60]}
+
+    raise DataCleanError(
+        f"欄名重複（不允許）→ {stage} 立刻中止",
+        file=file or "UNKNOWN",
+        item=item,
+        subitem=subitem,
+        value={
+            "table_name": table_name,
+            "dup_cols": uniq_dup[:60],
+            "dup_counts": dup_counts,
+            "n_cols": int(len(cols)),
+        },
+        hint="這通常是 fields_span 沒套到（fallback frameup_safe）或原始表頭結構變了。請補 fields_span/groups 或調整 subtitle/欄位解析。",
+    )
 
 
 @dataclass
@@ -712,6 +864,7 @@ class _PendingWrite:
     partition_by_date: bool
     bucket_mode: str
     dfs: List[pd.DataFrame] = field(default_factory=list)
+    sources: List[str] = field(default_factory=list)  # 每個 df 對應的 source 檔名
 
 
 _DB_WRITE_BUFFER: Dict[Tuple[str, str], _PendingWrite] = {}
@@ -730,7 +883,18 @@ def _enqueue_db_write(
     is_me_freq: bool,
     partition_by_date: bool,
     bucket_mode: str,
+    source_file: Optional[str] = None,
 ) -> None:
+    # ✅ fail-fast：concat 以前就擋掉（你要的「立刻中止」）
+    _assert_unique_columns(
+        df,
+        file=source_file,
+        item=item,
+        subitem=subitem,
+        table_name=table_name,
+        stage="enqueue",
+    )
+
     key = (str(db_path), table_name)
 
     if key not in _DB_WRITE_BUFFER:
@@ -749,6 +913,7 @@ def _enqueue_db_write(
 
     pending = _DB_WRITE_BUFFER[key]
     pending.dfs.append(df.copy())
+    pending.sources.append(str(source_file) if source_file else "UNKNOWN")
 
 
 def _drop_dup_with_report(
@@ -829,7 +994,48 @@ def _flush_db_write_buffer() -> None:
         if not pending.dfs:
             continue
 
-        df_new = pd.concat(pending.dfs, ignore_index=True)
+        # ✅ 二次保險：理論上 enqueue 已擋掉，但保留避免有人繞過 _enqueue_db_write
+        for i, df in enumerate(pending.dfs):
+            _assert_unique_columns(
+                df,
+                file=pending.sources[i] if i < len(pending.sources) else "UNKNOWN",
+                item=pending.item,
+                subitem=pending.subitem,
+                table_name=pending.table_name,
+                stage="flush 前（buffer 內）",
+            )
+
+        try:
+            dfs = []
+            srcs = []
+            for i, df in enumerate(pending.dfs):
+                if df is None or df.empty:
+                    continue
+                dfs.append(df)
+                if i < len(pending.sources):
+                    srcs.append(pending.sources[i])
+
+            pending.dfs = dfs
+            pending.sources = srcs
+
+            if not pending.dfs:
+                continue
+
+            df_new = pd.concat(pending.dfs, ignore_index=True, sort=False)
+
+        except Exception as e:
+            bad = []
+            for i, df in enumerate(pending.dfs):
+                cols = pd.Index([str(c) for c in df.columns])
+                if not cols.is_unique:
+                    dup_cols = cols[cols.duplicated()].tolist()
+                    bad.append((i, pending.sources[i] if i < len(pending.sources) else "UNKNOWN", dup_cols[:60]))
+
+            logger.error(
+                "concat 失敗 | item=%s table=%s | bad_dfs=%s | err=%s",
+                pending.item, pending.table_name, bad, e
+            )
+            raise
 
         dbi = DBPkl(
             str(pending.db_path),
@@ -953,11 +1159,12 @@ def _flush_db_write_buffer() -> None:
 
 def _write_to_db(
     df: pd.DataFrame,
-    convert_mode: str = "coerce",  # ★ changed: 原本 upcast，對「字串像數字」沒幫助
+    convert_mode: str = "coerce",
     *,
     item: str,
     subitem: str,
     bucket_mode: str = "all",
+    source_file: str,
 ) -> None:
     pk: List[str] = []
     if "代號" in df.columns and "date" in df.columns:
@@ -996,6 +1203,14 @@ def _write_to_db(
                 len(df_chunk),
             )
 
+            df_chunk = _repair_duplicate_columns(
+                df_chunk,
+                file_name=source_file,
+                item=item,
+                subitem=subitem,
+                table_name=table_name,
+            )
+
             _enqueue_db_write(
                 df_chunk,
                 db_path=db_path,
@@ -1008,6 +1223,7 @@ def _write_to_db(
                 is_me_freq=is_me_freq,
                 partition_by_date=True,
                 bucket_mode=bucket_mode,
+                source_file=source_file,   # ✅ FIX：bucket 分支也要傳，否則 UNKNOWN
             )
 
         return
@@ -1023,6 +1239,14 @@ def _write_to_db(
         partition_cols,
     )
 
+    df = _repair_duplicate_columns(
+        df,
+        file_name=source_file,
+        item=item,
+        subitem=subitem,
+        table_name=table_name,
+    )
+
     _enqueue_db_write(
         df,
         db_path=db_path,
@@ -1035,11 +1259,9 @@ def _write_to_db(
         is_me_freq=is_me_freq,
         partition_by_date=partition_by_date,
         bucket_mode=bucket_mode,
+        source_file=source_file,
     )
 
-# ====== 下面你的主流程（_process_one_file / _process_twse_data_impl / process_twse_data / CLI） ======
-# （其餘內容保持你貼的版本不變）
-# 你貼的檔案後半段我不再重複註解，直接原樣保留。
 
 # ---- 清洗一個檔案（主流程子步驟） ----
 def _process_one_file(
@@ -1062,11 +1284,11 @@ def _process_one_file(
     t1 = time.perf_counter()
 
     try:
-        date_key = raw.get("crawlerdic",{}).get("payload",{}).get("date")
+        date_key = raw.get("crawlerdic", {}).get("payload", {}).get("date")
     except Exception as e:
         raise DataCleanError("無法取得 crawler 日期", file=file_name, item=parentdir, value=raw.get("crawlerdic")) from e
 
-    subtitle_from_crawler = raw.get("crawlerdic",{}).get("subtitle")
+    subtitle_from_crawler = raw.get("crawlerdic", {}).get("subtitle")
     if isinstance(subtitle_from_crawler, list) and subtitle_from_crawler:
         subtitle_allowed = [colname_dic.get(x, x) for x in subtitle_from_crawler]
     else:
@@ -1163,6 +1385,7 @@ def _process_one_file(
             item=parentdir,
             subitem=subitem,
             bucket_mode=bucket_mode,
+            source_file=file_name,
         )
         t_write_end = time.perf_counter()
         write_time_total += (t_write_end - t_write_start)
@@ -1182,10 +1405,6 @@ def _process_one_file(
     )
 
     return date_key, parentdir, file_name
-
-# （後續 _process_twse_data_impl / process_twse_data / CLI 與你貼的一致，略）
-# 你可以直接把你原檔後半段黏回去；上面變動點只在 _write_to_db 的預設 convert_mode。
-
 
 
 # ---- 清洗流程（可被 import 呼叫） ----
